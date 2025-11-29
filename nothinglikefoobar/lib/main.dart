@@ -1,8 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart'; // Required for SynchronousFuture
 import 'package:google_fonts/google_fonts.dart';
 import 'package:photo_manager/photo_manager.dart';
 import 'package:transparent_image/transparent_image.dart';
 import 'dart:typed_data';
+import 'dart:ui' as ui;
+
+import 'fullscreen_view.dart';
 
 void main() {
   runApp(const CactusApp());
@@ -18,14 +22,12 @@ class CactusApp extends StatelessWidget {
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         scaffoldBackgroundColor: Colors.black,
-        // The "Nothing" Red
         primaryColor: const Color(0xFFD71921),
         colorScheme: const ColorScheme.dark(
           primary: Color(0xFFD71921),
           surface: Colors.black,
           onSurface: Colors.white,
         ),
-        // "Share Tech Mono" is the closest Google Font to Nothing's Ndot
         textTheme: GoogleFonts.shareTechMonoTextTheme(
           Theme.of(context).textTheme.apply(bodyColor: Colors.white),
         ),
@@ -43,10 +45,17 @@ class NothingGalleryHome extends StatefulWidget {
   State<NothingGalleryHome> createState() => _NothingGalleryHomeState();
 }
 
+enum GallerySortOrder { recent, oldest }
+
 class _NothingGalleryHomeState extends State<NothingGalleryHome> {
+  // Navigation State
+  int _selectedIndex = 0;
+
+  // Gallery State
   List<AssetEntity> _images = [];
   bool _isLoading = true;
-  int _privateCount = 0; // Mock count for the header
+  bool _hasPermission = false;
+  GallerySortOrder _sortOrder = GallerySortOrder.recent;
 
   @override
   void initState() {
@@ -55,38 +64,63 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
   }
 
   Future<void> _fetchAssets() async {
-    // 1. Request Permission
+    // Only set loading if we don't have images yet to avoid flashing
+    if (_images.isEmpty) setState(() => _isLoading = true);
+
     final PermissionState ps = await PhotoManager.requestPermissionExtend();
-    if (!ps.isAuth) {
-      // Handle permission denied (show dialog in real app)
-      setState(() => _isLoading = false);
+
+    if (!ps.isAuth && !ps.hasAccess) {
+      setState(() {
+        _isLoading = false;
+        _hasPermission = false;
+      });
       return;
     }
 
-    // 2. Fetch Albums (Recent)
+    final FilterOptionGroup filterOption = FilterOptionGroup(
+      orders: [
+        OrderOption(
+          type: OrderOptionType.createDate,
+          asc: _sortOrder == GallerySortOrder.oldest,
+        ),
+      ],
+    );
+
     final List<AssetPathEntity> albums = await PhotoManager.getAssetPathList(
       type: RequestType.image,
       onlyAll: true,
+      filterOption: filterOption,
     );
 
     if (albums.isEmpty) {
-      setState(() => _isLoading = false);
+      setState(() {
+        _isLoading = false;
+        _hasPermission = true;
+      });
       return;
     }
 
-    // 3. Fetch Photos from "Recent" album
-    // Loading first 100 for the hackathon demo to be fast
-    final List<AssetEntity> media = await albums[0].getAssetListPaged(
-      page: 0,
-      size: 100,
+    final int assetCount = await albums[0].assetCountAsync;
+
+    final List<AssetEntity> media = await albums[0].getAssetListRange(
+      start: 0,
+      end: assetCount,
     );
 
     setState(() {
       _images = media;
       _isLoading = false;
-      // Just a mock number to make the UI look cool
-      _privateCount = (media.length * 0.15).round();
+      _hasPermission = true;
     });
+  }
+
+  void _toggleSortOrder() {
+    setState(() {
+      _sortOrder = _sortOrder == GallerySortOrder.recent
+          ? GallerySortOrder.oldest
+          : GallerySortOrder.recent;
+    });
+    _fetchAssets();
   }
 
   @override
@@ -95,25 +129,32 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
       body: SafeArea(
         child: Column(
           children: [
-            _buildNothingHeader(),
+            // Expanded content area that switches based on tab
             Expanded(
-              child: _isLoading
-                  ? const Center(
-                  child: CircularProgressIndicator(color: Color(0xFFD71921)))
-                  : _images.isEmpty
-                  ? _buildEmptyState()
-                  : _buildPhotoGrid(),
+              child: _selectedIndex == 0
+                  ? _buildGalleryView()
+                  : _buildSearchView(),
             ),
-            _buildBottomBar(),
+            _buildNothingNavBar(),
           ],
         ),
       ),
     );
   }
 
-  Widget _buildNothingHeader() {
+  // --- VIEW 1: GALLERY ---
+  Widget _buildGalleryView() {
+    return Column(
+      children: [
+        _buildHeader(),
+        Expanded(child: _buildGridBody()),
+      ],
+    );
+  }
+
+  Widget _buildHeader() {
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24.0, vertical: 20.0),
+      padding: const EdgeInsets.fromLTRB(24, 24, 24, 10),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -122,136 +163,131 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
             children: [
               Text(
                 "NOTHING",
-                style: GoogleFonts.shareTechMono(
-                  fontSize: 28,
-                  letterSpacing: 2.0,
-                  fontWeight: FontWeight.bold,
-                ),
+                style: GoogleFonts.shareTechMono(fontSize: 28, fontWeight: FontWeight.bold),
               ),
-              // The "Red Dot" indicator active when privacy mode is on
-              Container(
-                width: 8,
-                height: 8,
-                decoration: const BoxDecoration(
-                  color: Color(0xFFD71921), // Nothing Red
-                  shape: BoxShape.circle,
-                ),
-              ),
+              Container(width: 8, height: 8, color: const Color(0xFFD71921)),
             ],
           ),
+          const SizedBox(height: 8),
           Row(
             children: [
-              Text(
-                "PRIVACY GALLERY",
-                style: GoogleFonts.shareTechMono(
-                  fontSize: 14,
-                  color: Colors.grey[600],
-                  letterSpacing: 1.5,
+              Text("PRIVACY GALLERY", style: TextStyle(color: Colors.grey[600])),
+              const Spacer(),
+              GestureDetector(
+                onTap: _toggleSortOrder,
+                child: Row(
+                  children: [
+                    Icon(
+                      _sortOrder == GallerySortOrder.recent
+                          ? Icons.arrow_downward
+                          : Icons.arrow_upward,
+                      size: 14,
+                      color: const Color(0xFFD71921),
+                    ),
+                    const SizedBox(width: 4),
+                    Text(
+                      _sortOrder == GallerySortOrder.recent ? "RECENT" : "OLDEST",
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: Color(0xFFD71921),
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              const Spacer(),
-              Text(
-                "${_images.length} ITEMS",
-                style: const TextStyle(fontSize: 12, color: Colors.grey),
-              ),
+              const SizedBox(width: 16),
+              if (_images.isNotEmpty)
+                Text("${_images.length} FILES", style: const TextStyle(fontSize: 12)),
             ],
           ),
           const SizedBox(height: 10),
-          // The "Dotted" Divider line
-          Container(
-            height: 1,
-            width: double.infinity,
-            decoration: BoxDecoration(
-              gradient: LinearGradient(
-                colors: [Colors.white.withOpacity(0.3), Colors.transparent],
-                stops: const [0.5, 0.5],
-                // Simple hack to make a dotted line effect
-                begin: Alignment.centerLeft,
-                end: Alignment.centerRight,
-              ),
-            ),
-            child: Row(
-              children: List.generate(
-                  40,
-                      (index) => Expanded(
-                    child: Container(
-                      color: index % 2 == 0
-                          ? Colors.grey[800]
-                          : Colors.transparent,
-                      height: 1,
-                    ),
-                  )),
-            ),
-          ),
+          Container(height: 1, color: Colors.grey[800]),
         ],
       ),
     );
   }
 
-  Widget _buildEmptyState() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(Icons.hide_image_outlined, size: 60, color: Colors.grey),
-          const SizedBox(height: 16),
-          Text(
-            "NO ARTIFACTS FOUND",
-            style: TextStyle(color: Colors.grey[600], letterSpacing: 1.5),
-          ),
-        ],
-      ),
-    );
-  }
+  Widget _buildGridBody() {
+    if (_isLoading) {
+      return const Center(child: CircularProgressIndicator(color: Color(0xFFD71921)));
+    }
 
-  Widget _buildPhotoGrid() {
+    if (!_hasPermission) {
+      return _buildPermissionView();
+    }
+
+    if (_images.isEmpty) {
+      return const Center(child: Text("NO IMAGES FOUND"));
+    }
+
     return GridView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      cacheExtent: 1000,
       gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
         crossAxisCount: 3,
-        crossAxisSpacing: 8,
-        mainAxisSpacing: 8,
+        crossAxisSpacing: 2,
+        mainAxisSpacing: 2,
         childAspectRatio: 1.0,
       ),
       itemCount: _images.length,
       itemBuilder: (context, index) {
-        return _NothingPhotoTile(asset: _images[index]);
+        return _PhotoTile(asset: _images[index]);
       },
     );
   }
 
-  Widget _buildBottomBar() {
-    return Container(
-      padding: const EdgeInsets.all(24),
-      decoration: BoxDecoration(
-        color: Colors.black,
-        border: Border(top: BorderSide(color: Colors.white.withOpacity(0.1))),
-      ),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+  Widget _buildPermissionView() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          _buildCmdButton("CONSOLE"),
+          const Icon(Icons.lock_outline, size: 50, color: Color(0xFFD71921)),
+          const SizedBox(height: 20),
+          const Text("PERMISSION REQUIRED"),
+          const SizedBox(height: 20),
+          ElevatedButton(
+            onPressed: () => PhotoManager.openSetting(),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.white),
+            child: const Text("OPEN SETTINGS", style: TextStyle(color: Colors.black)),
+          )
+        ],
+      ),
+    );
+  }
 
-          // The Main Action Button
-          Container(
-            height: 50,
-            padding: const EdgeInsets.symmetric(horizontal: 24),
-            decoration: BoxDecoration(
-              color: const Color(0xFFD71921),
-              borderRadius: BorderRadius.circular(30),
+  // --- VIEW 2: SEARCH (Placeholder for Dev B) ---
+  Widget _buildSearchView() {
+    return Padding(
+      padding: const EdgeInsets.all(24.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            "SEARCH",
+            style: GoogleFonts.shareTechMono(fontSize: 28, fontWeight: FontWeight.bold),
+          ),
+          const SizedBox(height: 20),
+          TextField(
+            style: const TextStyle(color: Colors.white, fontSize: 18),
+            decoration: InputDecoration(
+              hintText: "TYPE COMMAND...",
+              hintStyle: TextStyle(color: Colors.grey[700]),
+              enabledBorder: const UnderlineInputBorder(borderSide: BorderSide(color: Colors.white)),
+              focusedBorder: const UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFFD71921))),
             ),
-            child: const Center(
-              child: Row(
+          ),
+          const SizedBox(height: 40),
+          Expanded(
+            child: Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.qr_code_scanner, color: Colors.black, size: 18),
-                  SizedBox(width: 8),
+                  Icon(Icons.auto_awesome, size: 40, color: Colors.grey[800]),
+                  const SizedBox(height: 16),
                   Text(
-                    "SCAN PRIVACY",
-                    style: TextStyle(
-                        color: Colors.black,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 1.0
-                    ),
+                    "CACTUS AGENT READY",
+                    style: TextStyle(color: Colors.grey[700], letterSpacing: 2),
                   ),
                 ],
               ),
@@ -262,66 +298,139 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
     );
   }
 
-  Widget _buildCmdButton(String label) {
-    return Text(
-      "> $label",
-      style: const TextStyle(color: Colors.white, letterSpacing: 1.2),
+  // --- NAVIGATION BAR ---
+  Widget _buildNothingNavBar() {
+    return Container(
+      padding: const EdgeInsets.symmetric(vertical: 20),
+      decoration: BoxDecoration(
+        color: Colors.black,
+        border: Border(top: BorderSide(color: Colors.grey[900]!)),
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+        children: [
+          _buildNavItem(0, "GALLERY"),
+          _buildNavItem(1, "SEARCH"),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildNavItem(int index, String label) {
+    final bool isSelected = _selectedIndex == index;
+    return GestureDetector(
+      onTap: () => setState(() => _selectedIndex = index),
+      behavior: HitTestBehavior.opaque,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        child: Row(
+          children: [
+            if (isSelected) ...[
+              const Icon(Icons.circle, size: 8, color: Color(0xFFD71921)),
+              const SizedBox(width: 8),
+            ],
+            Text(
+              label,
+              style: TextStyle(
+                color: isSelected ? Colors.white : Colors.grey[700],
+                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                letterSpacing: 1.5,
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
 
-class _NothingPhotoTile extends StatelessWidget {
+class _PhotoTile extends StatelessWidget {
   final AssetEntity asset;
 
-  const _NothingPhotoTile({required this.asset});
+  const _PhotoTile({required this.asset});
 
   @override
   Widget build(BuildContext context) {
-    return FutureBuilder<Uint8List?>(
-      future: asset.thumbnailDataWithSize(const ThumbnailSize(200, 200)),
-      builder: (context, snapshot) {
-        if (snapshot.connectionState == ConnectionState.done &&
-            snapshot.data != null) {
-          return ClipRRect(
-            borderRadius: BorderRadius.circular(4), // Slight rounding
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                Image.memory(
-                  snapshot.data!,
-                  fit: BoxFit.cover,
-                ),
-                // "Glitch" overlay for style (subtle gradient)
-                Container(
-                  decoration: BoxDecoration(
-                    gradient: LinearGradient(
-                      begin: Alignment.topCenter,
-                      end: Alignment.bottomCenter,
-                      colors: [
-                        Colors.transparent,
-                        Colors.black.withOpacity(0.2),
-                      ],
-                    ),
-                  ),
-                )
-              ],
+    final imageProvider = AssetEntityImageProvider(
+        asset,
+        thumbnailSize: const ThumbnailSize.square(300)
+    );
+
+    return GestureDetector(
+      onTap: () async {
+        final bytes = await asset.thumbnailDataWithSize(const ThumbnailSize.square(300));
+
+        if (context.mounted) {
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => FullscreenImageView(
+                  asset: asset,
+                  thumbnailBytes: bytes
+              ),
             ),
           );
         }
-        return Container(
-          color: Colors.grey[900],
-          child: const Center(
-            child: SizedBox(
-              width: 20,
-              height: 20,
-              child: CircularProgressIndicator(
-                strokeWidth: 2,
-                color: Colors.grey,
-              ),
-            ),
-          ),
-        );
       },
+      child: Hero(
+        tag: asset.id,
+        child: FadeInImage(
+          placeholder: MemoryImage(kTransparentImage),
+          image: imageProvider,
+          fit: BoxFit.cover,
+          fadeInDuration: const Duration(milliseconds: 200),
+          excludeFromSemantics: true,
+        ),
+      ),
     );
   }
+}
+
+// Custom ImageProvider for native caching (kept from previous version)
+class AssetEntityImageProvider extends ImageProvider<AssetEntityImageProvider> {
+  final AssetEntity entity;
+  final ThumbnailSize thumbnailSize;
+
+  const AssetEntityImageProvider(
+      this.entity, {
+        this.thumbnailSize = const ThumbnailSize.square(300),
+      });
+
+  @override
+  ImageStreamCompleter loadImage(AssetEntityImageProvider key, ImageDecoderCallback decode) {
+    return MultiFrameImageStreamCompleter(
+      codec: _loadAsync(key, decode),
+      scale: 1.0,
+      debugLabel: 'AssetEntityImageProvider(${key.entity.id})',
+      informationCollector: () => <DiagnosticsNode>[
+        DiagnosticsProperty<AssetEntityImageProvider>('Image provider', this),
+        DiagnosticsProperty<AssetEntityImageProvider>('Image key', key),
+      ],
+    );
+  }
+
+  Future<ui.Codec> _loadAsync(AssetEntityImageProvider key, ImageDecoderCallback decode) async {
+    try {
+      final data = await key.entity.thumbnailDataWithSize(thumbnailSize);
+      if (data == null) throw StateError('Could not load data for asset: ${key.entity.id}');
+      return await decode(await ui.ImmutableBuffer.fromUint8List(data));
+    } catch (e) {
+      return await decode(await ui.ImmutableBuffer.fromUint8List(Uint8List(0)));
+    }
+  }
+
+  @override
+  Future<AssetEntityImageProvider> obtainKey(ImageConfiguration configuration) {
+    return SynchronousFuture<AssetEntityImageProvider>(this);
+  }
+
+  @override
+  bool operator ==(Object other) {
+    if (other.runtimeType != runtimeType) return false;
+    return other is AssetEntityImageProvider &&
+        other.entity.id == entity.id &&
+        other.thumbnailSize == thumbnailSize;
+  }
+
+  @override
+  int get hashCode => Object.hash(entity.id, thumbnailSize);
 }
