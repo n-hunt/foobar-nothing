@@ -36,7 +36,7 @@ class LocalAnalysisService {
       return;
     }
 
-    // Run in separate isolate-like execution to prevent UI blocking
+    // Run in background with microtask
     Future.microtask(() => _processUnanalyzedImages());
   }
 
@@ -69,12 +69,17 @@ class LocalAnalysisService {
     try {
       // Get all images that need local analysis
       final unanalyzedImages = await _db.getImagesNeedingLocalAnalysis();
-      _totalCount = unanalyzedImages.length;
+      
+      // Limit to 50 images per session to prevent crashes
+      const maxPerSession = 50;
+      final imagesToProcess = unanalyzedImages.take(maxPerSession).toList();
+      _totalCount = imagesToProcess.length;
 
-      debugPrint('[LocalAnalysis] Found $_totalCount unanalyzed images');
+      debugPrint('[LocalAnalysis] Found ${unanalyzedImages.length} unanalyzed images total');
+      debugPrint('[LocalAnalysis] Processing $_totalCount images this session (max $maxPerSession)');
       _emitProgress();
 
-      for (var imageMap in unanalyzedImages) {
+      for (var imageMap in imagesToProcess) {
         try {
           final imageId = imageMap['image_id'] as String;
           final filePath = imageMap['file_path'] as String;
@@ -82,8 +87,15 @@ class LocalAnalysisService {
 
           debugPrint('[LocalAnalysis] Analyzing: $fileName (${_processedCount + 1}/$_totalCount)');
 
-          // Get actual file path from AssetEntity
-          final AssetEntity? asset = await _getAssetById(filePath);
+          // Get actual file path from AssetEntity with timeout
+          final AssetEntity? asset = await _getAssetById(filePath).timeout(
+            const Duration(seconds: 5),
+            onTimeout: () {
+              debugPrint('[LocalAnalysis] Timeout getting asset: $filePath');
+              return null;
+            },
+          );
+          
           if (asset == null) {
             debugPrint('[LocalAnalysis] Asset not found for: $filePath');
             _processedCount++;
@@ -91,7 +103,22 @@ class LocalAnalysisService {
             continue;
           }
 
-          final File? file = await asset.file;
+          // Skip videos - only process images
+          if (asset.type == AssetType.video) {
+            debugPrint('[LocalAnalysis] Skipping video: $fileName');
+            _processedCount++;
+            _emitProgress();
+            continue;
+          }
+
+          final File? file = await asset.file?.timeout(
+            const Duration(seconds: 5),
+            onTimeout: () {
+              debugPrint('[LocalAnalysis] Timeout getting file: $fileName');
+              return null;
+            },
+          );
+          
           if (file == null || !await file.exists()) {
             debugPrint('[LocalAnalysis] File not found for: $fileName');
             _processedCount++;
@@ -99,8 +126,35 @@ class LocalAnalysisService {
             continue;
           }
 
-          // Analyze image with vision model
-          final description = await modelInit.analyzeImage(file.path);
+          // Skip very large files that might cause crashes
+          final fileSize = await file.length();
+          if (fileSize > 20 * 1024 * 1024) { // Skip files > 20MB
+            debugPrint('[LocalAnalysis] Skipping large file (${fileSize ~/ (1024 * 1024)}MB): $fileName');
+            _processedCount++;
+            _emitProgress();
+            continue;
+          }
+          if (fileSize > 20 * 1024 * 1024) { // Skip files > 20MB
+            debugPrint('[LocalAnalysis] Skipping large file (${fileSize ~/ (1024 * 1024)}MB): $fileName');
+            _processedCount++;
+            _emitProgress();
+            continue;
+          }
+
+          // Analyze image with vision model (with timeout and error handling)
+          String? description;
+          try {
+            description = await modelInit.analyzeImage(file.path).timeout(
+              const Duration(seconds: 30),
+              onTimeout: () {
+                debugPrint('[LocalAnalysis] Analysis timeout for: $fileName');
+                return null;
+              },
+            );
+          } catch (analysisError) {
+            debugPrint('[LocalAnalysis] Analysis error for $fileName: $analysisError');
+            description = null;
+          }
           
           if (description != null && description.isNotEmpty) {
             // Extract basic info from description
@@ -110,16 +164,14 @@ class LocalAnalysisService {
             final containsText = _likelyContainsText(description);
             final needsFiltering = containsPeople || containsText;
 
-            // Update database with local analysis
+            // Update database with local analysis (store full description now)
             await _db.updateLocalAnalysis(
               imageId: imageId,
               quickTags: tags,
               basicCategory: category,
               likelyContainsPeople: containsPeople,
               likelyContainsText: containsText,
-              quickDescription: description.length > 200 
-                  ? description.substring(0, 197) + '...'
-                  : description,
+              quickDescription: description,  // Store full description
               needsPrivacyFiltering: needsFiltering,
             );
 
@@ -131,18 +183,34 @@ class LocalAnalysisService {
           _processedCount++;
           _emitProgress();
           
-          // Yield to UI thread periodically to prevent blocking
-          if (_processedCount % 5 == 0) {
-            await Future.delayed(const Duration(milliseconds: 100));
+          // Add delay after each image to prevent memory issues
+          await Future.delayed(const Duration(milliseconds: 200));
+          
+          // Longer pause every 10 images to allow GC
+          if (_processedCount % 10 == 0) {
+            debugPrint('[LocalAnalysis] Processed ${_processedCount}/$_totalCount, pausing for GC...');
+            await Future.delayed(const Duration(seconds: 2));
           }
-        } catch (e) {
+        } catch (e, stackTrace) {
           debugPrint('[LocalAnalysis] Error analyzing image: $e');
+          debugPrint('[LocalAnalysis] Stack trace: $stackTrace');
           _processedCount++;
           _emitProgress();
+          
+          // Wait after errors to prevent cascade failures
+          await Future.delayed(const Duration(seconds: 1));
         }
       }
 
-      debugPrint('[LocalAnalysis] Completed: $_processedCount/$_totalCount images');
+      debugPrint('[LocalAnalysis] Completed batch: $_processedCount/$_totalCount images');
+      
+      // Check if more images remain
+      final remainingImages = await _db.getImagesNeedingLocalAnalysis();
+      if (remainingImages.isNotEmpty) {
+        debugPrint('[LocalAnalysis] ${remainingImages.length} images still need analysis. Restart app to process next batch.');
+      } else {
+        debugPrint('[LocalAnalysis] All images analyzed!');
+      }
     } catch (e) {
       debugPrint('[LocalAnalysis] Error in batch processing: $e');
     } finally {
