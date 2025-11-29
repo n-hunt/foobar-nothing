@@ -1,11 +1,12 @@
 import 'dart:io';
 import 'dart:typed_data';
 import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
 import 'package:photo_manager/photo_manager.dart';
-import 'package:transparent_image/transparent_image.dart';
+import 'package:share_plus/share_plus.dart';
 
-// Import the Video Player Widget
 import 'video_view.dart';
+import 'edit_image_view.dart'; // Import Edit View
 
 class FullscreenImageView extends StatefulWidget {
   final List<AssetEntity> assets;
@@ -34,6 +35,63 @@ class _FullscreenImageViewState extends State<FullscreenImageView> {
     _pageController = PageController(initialPage: widget.initialIndex);
   }
 
+  // --- ACTIONS ---
+
+  Future<void> _handleShare() async {
+    final AssetEntity asset = widget.assets[_currentIndex];
+    final File? file = await asset.file;
+    if (file != null) {
+      await Share.shareXFiles([XFile(file.path)]);
+    }
+  }
+
+  void _handleEdit() {
+    final AssetEntity asset = widget.assets[_currentIndex];
+    if (asset.type == AssetType.image) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => EditImageView(asset: asset),
+        ),
+      );
+    } else {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text("Video editing coming soon")),
+      );
+    }
+  }
+
+  void _handleDelete() {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.grey[900],
+        title: Text("Move to Bin?", style: GoogleFonts.shareTechMono(color: Colors.white)),
+        content: const Text(
+          "Items will be deleted after 30 days.",
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("CANCEL", style: TextStyle(color: Colors.white)),
+          ),
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx); // Close dialog
+              // Logic to remove from list would go here in a real app
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text("Moved to Bin")),
+              );
+              Navigator.pop(context); // Close fullscreen
+            },
+            child: const Text("BIN", style: TextStyle(color: Color(0xFFD71921))),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -52,31 +110,83 @@ class _FullscreenImageViewState extends State<FullscreenImageView> {
         ),
         centerTitle: true,
       ),
-      body: PageView.builder(
-        controller: _pageController,
-        itemCount: widget.assets.length,
-        onPageChanged: (index) {
-          setState(() => _currentIndex = index);
-        },
-        itemBuilder: (context, index) {
-          final asset = widget.assets[index];
+      body: Stack(
+        children: [
+          // 1. The Swipeable Content
+          PageView.builder(
+            controller: _pageController,
+            itemCount: widget.assets.length,
+            onPageChanged: (index) {
+              setState(() => _currentIndex = index);
+            },
+            itemBuilder: (context, index) {
+              final asset = widget.assets[index];
+              if (asset.type == AssetType.video) {
+                return SingleVideoPlayer(asset: asset);
+              } else {
+                return _SingleImageView(
+                  asset: asset,
+                  thumbnailBytes: index == widget.initialIndex ? widget.thumbnailBytes : null,
+                );
+              }
+            },
+          ),
 
-          // UNIFIED LOGIC: Switch widget based on type
-          if (asset.type == AssetType.video) {
-            return SingleVideoPlayer(asset: asset);
-          } else {
-            return _SingleImageView(
-              asset: asset,
-              // Only use the passed thumbnail for the FIRST image we opened
-              thumbnailBytes: index == widget.initialIndex ? widget.thumbnailBytes : null,
-            );
-          }
-        },
+          // 2. Bottom Action Bar (Google Photos Style)
+          Positioned(
+            bottom: 0,
+            left: 0,
+            right: 0,
+            child: Container(
+              color: Colors.black.withValues(alpha: 0.8),
+              padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 40),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  _ActionButton(icon: Icons.share_outlined, label: "Share", onTap: _handleShare),
+                  _ActionButton(icon: Icons.edit_outlined, label: "Edit", onTap: _handleEdit),
+                  _ActionButton(icon: Icons.delete_outline, label: "Bin", onTap: _handleDelete, isDestructive: true),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
+class _ActionButton extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final VoidCallback onTap;
+  final bool isDestructive;
+
+  const _ActionButton({
+    required this.icon,
+    required this.label,
+    required this.onTap,
+    this.isDestructive = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isDestructive ? const Color(0xFFD71921) : Colors.white;
+    return GestureDetector(
+      onTap: onTap,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, color: color, size: 24),
+          const SizedBox(height: 4),
+          Text(label, style: TextStyle(color: color, fontSize: 10)),
+        ],
+      ),
+    );
+  }
+}
+
+// ... _SingleImageView Class remains unchanged ...
 class _SingleImageView extends StatefulWidget {
   final AssetEntity asset;
   final Uint8List? thumbnailBytes;
@@ -98,12 +208,10 @@ class _SingleImageViewState extends State<_SingleImageView> {
   }
 
   Future<void> _loadLayers() async {
-    // Layer 2: 1080p Optimized
     widget.asset.thumbnailDataWithSize(const ThumbnailSize(1920, 1920)).then((bytes) {
       if (mounted) setState(() => _screenResBytes = bytes);
     });
 
-    // Layer 3: Original File
     widget.asset.file.then((file) {
       if (mounted) setState(() => _fullResFile = file);
     });
@@ -120,7 +228,6 @@ class _SingleImageViewState extends State<_SingleImageView> {
         child: Stack(
           fit: StackFit.expand,
           children: [
-            // Layer 1: Passed Thumbnail (Instant)
             if (widget.thumbnailBytes != null)
               Image.memory(
                 widget.thumbnailBytes!,
@@ -128,7 +235,6 @@ class _SingleImageViewState extends State<_SingleImageView> {
                 gaplessPlayback: true,
               ),
 
-            // Layer 2: Screen Res (Fast)
             if (_screenResBytes != null)
               Image.memory(
                 _screenResBytes!,
@@ -136,7 +242,6 @@ class _SingleImageViewState extends State<_SingleImageView> {
                 gaplessPlayback: true,
               ),
 
-            // Layer 3: Full Res (Highest Quality)
             if (_fullResFile != null)
               Image.file(
                 _fullResFile!,
@@ -144,7 +249,6 @@ class _SingleImageViewState extends State<_SingleImageView> {
                 gaplessPlayback: true,
               ),
 
-            // Spinner if nothing is ready
             if (widget.thumbnailBytes == null && _screenResBytes == null)
               const Center(
                 child: CircularProgressIndicator(color: Color(0xFFD71921)),

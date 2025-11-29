@@ -2,12 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:photo_manager/photo_manager.dart';
 
-// Page Imports
 import 'search_view.dart';
 import 'folders_view.dart';
-
-// Widget Imports
 import 'photo_tile.dart';
+import 'bin_service.dart';
 
 void main() {
   runApp(const CactusApp());
@@ -55,7 +53,6 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
   bool _hasPermission = false;
   GallerySortOrder _sortOrder = GallerySortOrder.recent;
 
-  // Category State
   String _selectedCategory = 'CAMERA';
   final List<String> _categories = ['CAMERA', 'VIDEOS', 'SCREENS', 'ALL'];
 
@@ -66,7 +63,7 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
   }
 
   Future<void> _fetchAssets() async {
-    // Only show loading if empty to prevent flashing on refresh
+    // Only show loading spinner if we have absolutely nothing
     if (_images.isEmpty) setState(() => _isLoading = true);
 
     final PermissionState ps = await PhotoManager.requestPermissionExtend();
@@ -88,16 +85,13 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
       ],
     );
 
-    // 1. Determine Request Type
     RequestType requestType = RequestType.image;
     if (_selectedCategory == 'VIDEOS') {
       requestType = RequestType.video;
     } else if (_selectedCategory == 'ALL' || _selectedCategory == 'CAMERA') {
-      // CHANGED: CAMERA now requests both images and videos (common)
       requestType = RequestType.common;
     }
 
-    // 2. Fetch Albums
     final List<AssetPathEntity> albums = await PhotoManager.getAssetPathList(
       type: requestType,
       hasAll: true,
@@ -113,16 +107,14 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
       return;
     }
 
-    // 3. Filter for specific album based on Category
     AssetPathEntity targetAlbum = albums.first;
-    String targetName = "Camera"; // Default
+    String targetName = "Camera";
 
     if (_selectedCategory == 'SCREENS') targetName = "Screenshots";
     if (_selectedCategory == 'ALL') targetName = "Recent";
 
     if (_selectedCategory != 'ALL') {
       for (var album in albums) {
-        // Robust check for Camera folder
         if (album.name == targetName || (targetName == "Camera" && !album.isAll && album.name.contains("Camera"))) {
           targetAlbum = album;
           break;
@@ -131,16 +123,44 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
     }
 
     final int assetCount = await targetAlbum.assetCountAsync;
-    final List<AssetEntity> media = await targetAlbum.getAssetListRange(
+
+    // --- OPTIMIZATION START ---
+    // Instead of waiting for ALL 5000 photos to load meta-data,
+    // we grab the first 60 instantly to render the UI.
+    const int firstPageSize = 60;
+
+    // 1. Load First Page (Instant)
+    final List<AssetEntity> firstBatch = await targetAlbum.getAssetListRange(
       start: 0,
-      end: assetCount,
+      end: assetCount < firstPageSize ? assetCount : firstPageSize,
     );
 
-    setState(() {
-      _images = media;
-      _isLoading = false;
-      _hasPermission = true;
-    });
+    if (mounted) {
+      setState(() {
+        // Filter bin items immediately
+        _images = firstBatch.where((a) => !BinService().isInBin(a)).toList();
+        _isLoading = false;
+        _hasPermission = true;
+      });
+    }
+
+    // 2. Load Remainder (Background)
+    if (assetCount > firstPageSize) {
+      // Small delay to let the UI frame render
+      await Future.delayed(const Duration(milliseconds: 100));
+
+      final List<AssetEntity> remaining = await targetAlbum.getAssetListRange(
+        start: firstPageSize,
+        end: assetCount,
+      );
+
+      if (mounted) {
+        setState(() {
+          _images.addAll(remaining.where((a) => !BinService().isInBin(a)));
+        });
+      }
+    }
+    // --- OPTIMIZATION END ---
   }
 
   void _toggleSortOrder() {
@@ -173,7 +193,7 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
       case 0:
         return _buildGalleryView();
       case 1:
-        return const FoldersView();
+        return const FoldersView(key: ValueKey('folders'));
       case 2:
         return const SearchView();
       default:
@@ -210,7 +230,6 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
           const SizedBox(height: 8),
           Row(
             children: [
-              // CATEGORY DROPDOWN
               DropdownButtonHideUnderline(
                 child: DropdownButton<String>(
                   value: _selectedCategory,
@@ -239,7 +258,6 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
                 ),
               ),
               const Spacer(),
-              // SORT BUTTON
               GestureDetector(
                 onTap: _toggleSortOrder,
                 child: Row(
@@ -297,7 +315,7 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
           children: [
             Icon(Icons.image_not_supported_outlined, color: Colors.grey[800], size: 48),
             const SizedBox(height: 16),
-            Text("NO ${_selectedCategory} FOUND", style: TextStyle(color: Colors.grey[600])),
+            Text("NO $_selectedCategory FOUND", style: TextStyle(color: Colors.grey[600])),
           ],
         ),
       );
@@ -318,6 +336,11 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
           asset: _images[index],
           assets: _images,
           index: index,
+          onDeleted: () {
+            setState(() {
+              _images.removeAt(index);
+            });
+          },
         );
       },
     );
@@ -342,7 +365,6 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
     );
   }
 
-  // --- NAVIGATION BAR ---
   Widget _buildNothingNavBar() {
     return Container(
       padding: const EdgeInsets.symmetric(vertical: 20),

@@ -43,6 +43,8 @@ dependencies:
   photo_manager: ^3.8.2
   transparent_image: ^2.0.1
   video_player: ^2.10.1
+  share_plus: ^12.0.1
+  crop_your_image: ^2.0.0
 
 dev_dependencies:
   flutter_test:

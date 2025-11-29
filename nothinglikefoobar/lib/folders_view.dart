@@ -4,8 +4,9 @@ import 'package:photo_manager/photo_manager.dart';
 import 'package:transparent_image/transparent_image.dart';
 import 'dart:typed_data';
 
-// FIX: Import from the same directory (flattened structure)
 import 'folder_detail_view.dart';
+import 'photo_tile.dart';
+import 'bin_service.dart';
 
 class FoldersView extends StatefulWidget {
   const FoldersView({super.key});
@@ -32,7 +33,7 @@ class _FoldersViewState extends State<FoldersView> {
     }
 
     final albums = await PhotoManager.getAssetPathList(
-      type: RequestType.image,
+      type: RequestType.common, // CHANGED: Show folders with videos too
       hasAll: true,
     );
 
@@ -48,6 +49,8 @@ class _FoldersViewState extends State<FoldersView> {
       return const Center(child: CircularProgressIndicator(color: Color(0xFFD71921)));
     }
 
+    int totalCount = _albums.length + 1;
+
     return Column(
       children: [
         _buildHeader(),
@@ -60,9 +63,13 @@ class _FoldersViewState extends State<FoldersView> {
               mainAxisSpacing: 16,
               childAspectRatio: 0.85,
             ),
-            itemCount: _albums.length,
+            itemCount: totalCount,
             itemBuilder: (context, index) {
-              return _AlbumTile(album: _albums[index]);
+              if (index == 1) {
+                return const _BinTile();
+              }
+              final albumIndex = index > 1 ? index - 1 : index;
+              return _AlbumTile(album: _albums[albumIndex]);
             },
           ),
         ),
@@ -82,7 +89,7 @@ class _FoldersViewState extends State<FoldersView> {
           ),
           const SizedBox(height: 8),
           Text(
-            "${_albums.length} COLLECTIONS FOUND",
+            "${_albums.length + 1} COLLECTIONS FOUND",
             style: TextStyle(color: Colors.grey[600], fontSize: 12, letterSpacing: 1.2),
           ),
           const SizedBox(height: 10),
@@ -93,6 +100,139 @@ class _FoldersViewState extends State<FoldersView> {
   }
 }
 
+// --- BIN TILE ---
+class _BinTile extends StatelessWidget {
+  const _BinTile();
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () {
+        Navigator.push(
+          context,
+          MaterialPageRoute(builder: (context) => const BinDetailView()),
+        ).then((_) {
+          // Force refresh when coming back from bin (in case restored items moved)
+          // (Requires converting FoldersView to listenable or using setstate in parent)
+        });
+      },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.grey[900],
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: const Color(0xFFD71921).withValues(alpha: 0.3)),
+              ),
+              child: const Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.delete_outline, color: Color(0xFFD71921), size: 40),
+                    SizedBox(height: 8),
+                    Text("30 DAYS LEFT", style: TextStyle(color: Colors.grey, fontSize: 10)),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          const Text(
+            "BIN",
+            style: TextStyle(fontWeight: FontWeight.bold, color: Colors.white, fontSize: 14),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            "${BinService().count} FILES",
+            style: TextStyle(color: Colors.grey[600], fontSize: 10),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// --- BIN VIEW (Updated to use Service) ---
+class BinDetailView extends StatefulWidget {
+  const BinDetailView({super.key});
+
+  @override
+  State<BinDetailView> createState() => _BinDetailViewState();
+}
+
+class _BinDetailViewState extends State<BinDetailView> {
+
+  @override
+  Widget build(BuildContext context) {
+    // Get assets directly from memory (Instant load)
+    final binAssets = BinService().assets;
+
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        leading: IconButton(
+          icon: const Icon(Icons.arrow_back, color: Colors.white),
+          onPressed: () => Navigator.pop(context),
+        ),
+        title: Text("BIN", style: GoogleFonts.shareTechMono(color: Colors.white)),
+        actions: [
+          if (binAssets.isNotEmpty)
+            TextButton(
+              onPressed: () async {
+                await BinService().emptyBin();
+                setState(() {}); // Refresh UI
+                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Bin Empty")));
+              },
+              child: Text("EMPTY BIN", style: GoogleFonts.shareTechMono(color: const Color(0xFFD71921))),
+            )
+        ],
+      ),
+      body: binAssets.isEmpty
+          ? _buildEmptyState()
+          : _buildGrid(binAssets),
+    );
+  }
+
+  Widget _buildEmptyState() {
+    return Center(
+      child: Column(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: [
+          const Icon(Icons.delete_outline, color: Colors.grey, size: 64),
+          const SizedBox(height: 16),
+          Text("NO ITEMS IN BIN", style: GoogleFonts.shareTechMono(color: Colors.grey)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildGrid(List<AssetEntity> assets) {
+    return GridView.builder(
+      padding: const EdgeInsets.all(2),
+      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+        crossAxisCount: 3, crossAxisSpacing: 2, mainAxisSpacing: 2,
+      ),
+      itemCount: assets.length,
+      itemBuilder: (context, index) {
+        return PhotoTile(
+          asset: assets[index],
+          assets: assets,
+          index: index,
+          onDeleted: () {
+            // In the Bin, "Delete" usually means "Delete Permanently" or "Restore"
+            // For now, we assume it triggers a refresh
+            setState(() {});
+          },
+        );
+      },
+    );
+  }
+}
+
+// --- ALBUM TILE ---
 class _AlbumTile extends StatelessWidget {
   final AssetPathEntity album;
 
@@ -110,7 +250,6 @@ class _AlbumTile extends StatelessWidget {
 
         return GestureDetector(
           onTap: () {
-            // Navigate to the extracted detail screen
             Navigator.of(context).push(
               MaterialPageRoute(
                 builder: (context) => FolderDetailView(album: album),
@@ -125,7 +264,7 @@ class _AlbumTile extends StatelessWidget {
                   decoration: BoxDecoration(
                     color: Colors.grey[900],
                     borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.white.withOpacity(0.1)),
+                    border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
                   ),
                   clipBehavior: Clip.antiAlias,
                   child: coverAsset != null

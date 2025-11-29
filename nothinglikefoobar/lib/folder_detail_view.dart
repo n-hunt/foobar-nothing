@@ -2,8 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:photo_manager/photo_manager.dart';
 
-// Import the shared widget
 import 'photo_tile.dart';
+import 'bin_service.dart'; // NEW IMPORT
 
 enum GallerySortOrder { recent, oldest }
 
@@ -39,14 +39,12 @@ class _FolderDetailViewState extends State<FolderDetailView> {
       ],
     );
 
-    // Re-fetch the album content with specific sort options
     final albums = await PhotoManager.getAssetPathList(
-      type: RequestType.image,
+      type: RequestType.common, // CHANGED: Show videos too
       onlyAll: widget.album.isAll,
       filterOption: filterOption,
     );
 
-    // Find the matching album in the new sorted list
     final matchingAlbum = albums.firstWhere(
             (a) => a.id == widget.album.id,
         orElse: () => widget.album
@@ -55,9 +53,12 @@ class _FolderDetailViewState extends State<FolderDetailView> {
     final int count = await matchingAlbum.assetCountAsync;
     final media = await matchingAlbum.getAssetListRange(start: 0, end: count);
 
+    // Filter out items that are in the bin
+    final visibleMedia = media.where((a) => !BinService().isInBin(a)).toList();
+
     if (mounted) {
       setState(() {
-        _images = media;
+        _images = visibleMedia;
         _isLoading = false;
       });
     }
@@ -161,11 +162,16 @@ class _FolderDetailViewState extends State<FolderDetailView> {
       ),
       itemCount: _images.length,
       itemBuilder: (context, index) {
-        // Using the shared PhotoTile here!
         return PhotoTile(
           asset: _images[index],
           assets: _images,
           index: index,
+          onDeleted: () {
+            // FIX: Refresh the UI when item is deleted
+            setState(() {
+              _images.removeAt(index);
+            });
+          },
         );
       },
     );

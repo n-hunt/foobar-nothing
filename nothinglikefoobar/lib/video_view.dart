@@ -5,8 +5,6 @@ import 'package:photo_manager/photo_manager.dart';
 import 'package:video_player/video_player.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-/// A widget that plays a SINGLE video asset.
-/// The swiping logic is now handled by the parent (FullscreenImageView).
 class SingleVideoPlayer extends StatefulWidget {
   final AssetEntity asset;
 
@@ -31,7 +29,6 @@ class _SingleVideoPlayerState extends State<SingleVideoPlayer> {
     _initVideo();
   }
 
-  // Dispose when we swipe away to a new page
   @override
   void dispose() {
     _controller?.removeListener(_videoListener);
@@ -41,10 +38,8 @@ class _SingleVideoPlayerState extends State<SingleVideoPlayer> {
 
   Future<void> _initVideo() async {
     try {
-      // Clean up previous controller if exists
       _controller?.dispose();
 
-      // STRATEGY: File Access (Most Reliable)
       final File? file = await widget.asset.file;
 
       if (file == null) throw Exception("Could not retrieve video file from gallery.");
@@ -138,7 +133,7 @@ class _SingleVideoPlayerState extends State<SingleVideoPlayer> {
           IgnorePointer(
             child: Container(
               padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(color: Colors.black.withOpacity(0.5), shape: BoxShape.circle),
+              decoration: BoxDecoration(color: Colors.black.withValues(alpha: 0.5), shape: BoxShape.circle),
               child: const Icon(Icons.play_arrow, color: Colors.white, size: 48),
             ),
           ),
@@ -188,7 +183,7 @@ class _SingleVideoPlayerState extends State<SingleVideoPlayer> {
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.bottomCenter, end: Alignment.topCenter,
-            colors: [Colors.black.withOpacity(0.9), Colors.transparent],
+            colors: [Colors.black.withValues(alpha: 0.9), Colors.transparent],
           ),
         ),
         child: Column(
@@ -207,7 +202,7 @@ class _SingleVideoPlayerState extends State<SingleVideoPlayer> {
               data: SliderThemeData(
                 activeTrackColor: const Color(0xFFD71921),
                 thumbColor: const Color(0xFFD71921),
-                overlayColor: const Color(0xFFD71921).withOpacity(0.2),
+                overlayColor: const Color(0xFFD71921).withValues(alpha: 0.2),
                 trackHeight: 2.0,
                 thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6.0),
               ),
