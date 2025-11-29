@@ -177,7 +177,12 @@ class _FolderDetailViewState extends State<FolderDetailView> with WidgetsBinding
               Expanded(
                 child: Text(
                   widget.album.name.toUpperCase(),
-                  style: GoogleFonts.shareTechMono(fontSize: 24, fontWeight: FontWeight.bold),
+                  style: GoogleFonts.dotGothic16(
+                    fontSize: 24,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 2.0,
+                    color: const Color(0xFFFFFFFF),
+                  ),
                   overflow: TextOverflow.ellipsis,
                 ),
               ),
@@ -186,7 +191,14 @@ class _FolderDetailViewState extends State<FolderDetailView> with WidgetsBinding
           const SizedBox(height: 16),
           Row(
             children: [
-              Text("FOLDER VIEW", style: TextStyle(color: Colors.grey[600])),
+              Text(
+                "FOLDER VIEW",
+                style: GoogleFonts.ibmPlexMono(
+                  color: const Color(0xFF8E8E93),
+                  fontSize: 11,
+                  letterSpacing: 1.2,
+                ),
+              ),
               const Spacer(),
               // OPTIMIZATION: Show loading indicator for remaining items
               if (_images.length < _totalCount) ...[

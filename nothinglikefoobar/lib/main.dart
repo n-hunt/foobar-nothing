@@ -4,7 +4,6 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import 'search_view.dart';
-import 'search_view_2.dart';
 import 'folders_view.dart';
 import 'photo_tile.dart';
 import 'bin_service.dart';
@@ -22,15 +21,28 @@ class CactusApp extends StatelessWidget {
       title: 'Nothing Privacy',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
-        scaffoldBackgroundColor: Colors.black,
-        primaryColor: const Color(0xFFD71921),
+        scaffoldBackgroundColor: const Color(0xFF000000), // Pure black
+        primaryColor: const Color(0xFFFF1E1E), // High-voltage red
         colorScheme: const ColorScheme.dark(
-          primary: Color(0xFFD71921),
-          surface: Colors.black,
-          onSurface: Colors.white,
+          primary: Color(0xFFFF1E1E), // High-voltage red
+          surface: Color(0xFF1C1C1E), // Dark charcoal
+          onSurface: Color(0xFFFFFFFF),
+          secondary: Color(0xFF8E8E93), // Light grey
         ),
-        textTheme: GoogleFonts.shareTechMonoTextTheme(
-          Theme.of(context).textTheme.apply(bodyColor: Colors.white),
+        textTheme: GoogleFonts.ibmPlexMonoTextTheme(
+          ThemeData.dark().textTheme.apply(
+            bodyColor: const Color(0xFFFFFFFF),
+            displayColor: const Color(0xFFFFFFFF),
+          ),
+        ),
+        appBarTheme: AppBarTheme(
+          backgroundColor: const Color(0xFF000000),
+          elevation: 0,
+          titleTextStyle: GoogleFonts.dotGothic16(
+            fontSize: 18,
+            color: const Color(0xFFFFFFFF),
+            letterSpacing: 1.2,
+          ),
         ),
         useMaterial3: true,
       ),
@@ -58,10 +70,17 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> with WidgetsBin
   String _selectedCategory = 'CAMERA';
   final List<String> _categories = ['CAMERA', 'VIDEOS', 'SCREENS', 'ALL'];
 
+  // Lazy loading state
+  bool _isLoadingMore = false;
+  int _totalAssetCount = 0;
+  AssetPathEntity? _currentAlbum;
+  final ScrollController _scrollController = ScrollController();
+
   @override
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _scrollController.addListener(_onScroll);
     _fetchAssets();
     // Listen to BinService updates
     BinService().addListener(_fetchAssets);
@@ -73,6 +92,8 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> with WidgetsBin
 
   @override
   void dispose() {
+    _scrollController.removeListener(_onScroll);
+    _scrollController.dispose();
     WidgetsBinding.instance.removeObserver(this);
     BinService().removeListener(_fetchAssets);
     PhotoManager.removeChangeCallback(_onPhotoManagerChange);
@@ -94,6 +115,18 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> with WidgetsBin
     // ENHANCEMENT: Immediate refresh on any gallery change
     debugPrint("Gallery changed: ${call.method}");
     _fetchAssets();
+  }
+
+  void _onScroll() {
+    if (_isLoadingMore || !_scrollController.hasClients) return;
+
+    final maxScroll = _scrollController.position.maxScrollExtent;
+    final currentScroll = _scrollController.position.pixels;
+    final threshold = maxScroll * 0.8; // Load more when 80% scrolled
+
+    if (currentScroll >= threshold) {
+      _loadMoreAssets();
+    }
   }
 
   Future<void> _fetchAssets() async {
@@ -161,6 +194,10 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> with WidgetsBin
 
     final int assetCount = await targetAlbum.assetCountAsync;
 
+    // Store for lazy loading
+    _currentAlbum = targetAlbum;
+    _totalAssetCount = assetCount;
+
     // ENHANCEMENT: For refresh (not initial load), just get latest items and merge
     if (!isInitialLoad && assetCount > _images.length) {
       // New items detected - fetch just the new ones
@@ -182,8 +219,8 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> with WidgetsBin
       return;
     }
 
-    // OPTIMIZATION: Load first 30 items immediately for initial load
-    const int firstBatch = 30;
+    // OPTIMIZATION: Load first 20 items immediately for initial load (reduced from 30)
+    const int firstBatch = 20;
 
     final List<AssetEntity> initialMedia = await targetAlbum.getAssetListRange(
       start: 0,
@@ -200,15 +237,17 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> with WidgetsBin
       });
     }
 
-    // Load remaining in batches to avoid blocking
+    // Load remaining in smaller batches with longer delays to avoid lag
     if (assetCount > firstBatch) {
-      const int batchSize = 100;
+      const int batchSize = 30; // Reduced from 100
+      const int maxBackgroundLoad = 200; // Only load up to 200 total items initially
       int currentStart = firstBatch;
+      final int maxEnd = assetCount > maxBackgroundLoad ? maxBackgroundLoad : assetCount;
 
-      while (currentStart < assetCount) {
-        await Future.delayed(const Duration(milliseconds: 50));
+      while (currentStart < maxEnd) {
+        await Future.delayed(const Duration(milliseconds: 200)); // Increased from 50ms
 
-        final int end = (currentStart + batchSize) > assetCount ? assetCount : currentStart + batchSize;
+        final int end = (currentStart + batchSize) > maxEnd ? maxEnd : currentStart + batchSize;
         final List<AssetEntity> batch = await targetAlbum.getAssetListRange(
           start: currentStart,
           end: end,
@@ -222,6 +261,42 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> with WidgetsBin
 
         currentStart = end;
       }
+
+      // Load remaining items lazily only when user scrolls near the end
+      // This prevents loading thousands of items unnecessarily
+    }
+  }
+
+  Future<void> _loadMoreAssets() async {
+    if (_isLoadingMore || _currentAlbum == null || _images.length >= _totalAssetCount) {
+      return; // Already loading, no album, or all loaded
+    }
+
+    setState(() => _isLoadingMore = true);
+
+    try {
+      const int batchSize = 50;
+      final int currentCount = _images.length;
+      final int end = (currentCount + batchSize) > _totalAssetCount
+          ? _totalAssetCount
+          : currentCount + batchSize;
+
+      final List<AssetEntity> batch = await _currentAlbum!.getAssetListRange(
+        start: currentCount,
+        end: end,
+      );
+
+      if (mounted) {
+        setState(() {
+          _images.addAll(batch.where((a) => !BinService().isInBin(a.id)));
+          _isLoadingMore = false;
+        });
+      }
+    } catch (e) {
+      debugPrint("Error loading more assets: $e");
+      if (mounted) {
+        setState(() => _isLoadingMore = false);
+      }
     }
   }
 
@@ -232,6 +307,105 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> with WidgetsBin
           : GallerySortOrder.recent;
     });
     _fetchAssets();
+  }
+
+  List<Map<String, dynamic>> _buildDateSections() {
+    if (_images.length <= 1) {
+      return [];
+    }
+
+    final now = DateTime.now();
+    final sections = <Map<String, dynamic>>[];
+    final List<AssetEntity> remainingImages = _images.sublist(1); // Skip hero image
+
+    final List<AssetEntity> thisWeek = [];
+    final List<AssetEntity> oneWeekAgo = [];
+    final List<AssetEntity> oneMonthAgo = [];
+    final Map<String, List<AssetEntity>> monthGroups = {};
+    final Map<String, List<AssetEntity>> yearGroups = {};
+
+    for (final asset in remainingImages) {
+      final date = asset.createDateTime;
+      final diff = now.difference(date);
+
+      if (diff.inDays < 7) {
+        // Within a week (no header)
+        thisWeek.add(asset);
+      } else if (diff.inDays >= 7 && diff.inDays < 14) {
+        // 1 week ago
+        oneWeekAgo.add(asset);
+      } else if (diff.inDays >= 14 && diff.inDays < 60) {
+        // 1 month ago (14-60 days)
+        oneMonthAgo.add(asset);
+      } else if (diff.inDays < 365) {
+        // Within a year - group by month name
+        final monthKey = '${date.year}-${date.month.toString().padLeft(2, '0')}';
+        monthGroups.putIfAbsent(monthKey, () => []);
+        monthGroups[monthKey]!.add(asset);
+      } else {
+        // Older than a year - group by year
+        final yearKey = '${date.year}';
+        yearGroups.putIfAbsent(yearKey, () => []);
+        yearGroups[yearKey]!.add(asset);
+      }
+    }
+
+    // Add "This Week" section (no header)
+    if (thisWeek.isNotEmpty) {
+      sections.add({
+        'header': null,
+        'images': thisWeek,
+      });
+    }
+
+    // Add "1 WEEK AGO" section
+    if (oneWeekAgo.isNotEmpty) {
+      sections.add({
+        'header': '1 WEEK AGO',
+        'images': oneWeekAgo,
+      });
+    }
+
+    // Add "1 MONTH AGO" section
+    if (oneMonthAgo.isNotEmpty) {
+      sections.add({
+        'header': '1 MONTH AGO',
+        'images': oneMonthAgo,
+      });
+    }
+
+    // Add month name sections (sorted newest to oldest)
+    final sortedMonths = monthGroups.keys.toList()..sort((a, b) => b.compareTo(a));
+    for (final monthKey in sortedMonths) {
+      final parts = monthKey.split('-');
+      final year = int.parse(parts[0]);
+      final month = int.parse(parts[1]);
+      final monthName = _getMonthName(month);
+
+      sections.add({
+        'header': '$monthName $year',
+        'images': monthGroups[monthKey]!,
+      });
+    }
+
+    // Add year sections (sorted newest to oldest)
+    final sortedYears = yearGroups.keys.toList()..sort((a, b) => b.compareTo(a));
+    for (final yearKey in sortedYears) {
+      sections.add({
+        'header': yearKey,
+        'images': yearGroups[yearKey]!,
+      });
+    }
+
+    return sections;
+  }
+
+  String _getMonthName(int month) {
+    const months = [
+      'JANUARY', 'FEBRUARY', 'MARCH', 'APRIL', 'MAY', 'JUNE',
+      'JULY', 'AUGUST', 'SEPTEMBER', 'OCTOBER', 'NOVEMBER', 'DECEMBER'
+    ];
+    return months[month - 1];
   }
 
   @override
@@ -258,8 +432,6 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> with WidgetsBin
         return const FoldersView(key: ValueKey('folders'));
       case 2:
         return const SearchView();
-      case 3:
-        return const SearchView2();
       default:
         return _buildGalleryView();
     }
@@ -276,8 +448,13 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> with WidgetsBin
   }
 
   Widget _buildHeader() {
-    return Padding(
+    return Container(
       padding: const EdgeInsets.fromLTRB(24, 24, 24, 10),
+      decoration: BoxDecoration(
+        border: Border(
+          bottom: BorderSide(color: const Color(0xFF1C1C1E), width: 1),
+        ),
+      ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
@@ -285,25 +462,43 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> with WidgetsBin
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
               Text(
-                "NOTHING",
-                style: GoogleFonts.shareTechMono(fontSize: 28, fontWeight: FontWeight.bold),
+                "MEMORIES",
+                style: GoogleFonts.dotGothic16(
+                  fontSize: 28,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 2.0,
+                  color: const Color(0xFFFFFFFF),
+                ),
               ),
-              Container(width: 8, height: 8, color: const Color(0xFFD71921)),
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFF1E1E),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFFFF1E1E).withValues(alpha: 0.5),
+                      blurRadius: 8,
+                      spreadRadius: 2,
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 16),
           Row(
             children: [
               DropdownButtonHideUnderline(
                 child: DropdownButton<String>(
                   value: _selectedCategory,
-                  dropdownColor: Colors.grey[900],
-                  icon: const Icon(Icons.keyboard_arrow_down, color: Color(0xFFD71921), size: 16),
-                  style: GoogleFonts.shareTechMono(
-                      color: Colors.white,
-                      fontSize: 14,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 1.0
+                  dropdownColor: const Color(0xFF1C1C1E),
+                  icon: const Icon(Icons.keyboard_arrow_down, color: Color(0xFFFF1E1E), size: 16),
+                  style: GoogleFonts.ibmPlexMono(
+                    color: const Color(0xFFFFFFFF),
+                    fontSize: 12,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.5,
                   ),
                   items: _categories.map((String category) {
                     return DropdownMenuItem<String>(
@@ -330,34 +525,48 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> with WidgetsBin
                       _sortOrder == GallerySortOrder.recent
                           ? Icons.arrow_downward
                           : Icons.arrow_upward,
-                      size: 14,
-                      color: const Color(0xFFD71921),
+                      size: 12,
+                      color: const Color(0xFFFF1E1E),
                     ),
-                    const SizedBox(width: 4),
+                    const SizedBox(width: 6),
                     Text(
                       _sortOrder == GallerySortOrder.recent ? "RECENT" : "OLDEST",
-                      style: const TextStyle(
-                        fontSize: 12,
-                        color: Color(0xFFD71921),
+                      style: GoogleFonts.ibmPlexMono(
+                        fontSize: 10,
+                        color: const Color(0xFFFF1E1E),
                         fontWeight: FontWeight.bold,
+                        letterSpacing: 1.2,
                       ),
                     ),
                   ],
                 ),
               ),
-              const SizedBox(width: 16),
+              const SizedBox(width: 20),
               if (_images.isNotEmpty)
-                Text("${_images.length}", style: const TextStyle(fontSize: 12)),
+                Text(
+                  "${_images.length}",
+                  style: GoogleFonts.ibmPlexMono(
+                    fontSize: 11,
+                    color: const Color(0xFF8E8E93),
+                    letterSpacing: 1.0,
+                  ),
+                ),
             ],
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 12),
           _isLoading
-              ? const LinearProgressIndicator(
-              minHeight: 1,
-              backgroundColor: Colors.transparent,
-              color: Color(0xFFD71921)
-          )
-              : Container(height: 1, color: Colors.grey[800]),
+              ? Container(
+                  height: 1,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        const Color(0xFFFF1E1E),
+                        const Color(0xFFFF1E1E).withValues(alpha: 0.0),
+                      ],
+                    ),
+                  ),
+                )
+              : Container(height: 1, color: const Color(0xFF1C1C1E)),
         ],
       ),
     );
@@ -365,7 +574,7 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> with WidgetsBin
 
   Widget _buildGridBody() {
     if (_isLoading && _images.isEmpty) {
-      return const Center(child: CircularProgressIndicator(color: Color(0xFFD71921)));
+      return const Center(child: CircularProgressIndicator(color: Color(0xFFFF1E1E)));
     }
 
     if (!_hasPermission) {
@@ -385,24 +594,164 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> with WidgetsBin
       );
     }
 
-    return GridView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 2),
-      cacheExtent: 1000,
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        crossAxisSpacing: 2,
-        mainAxisSpacing: 2,
-        childAspectRatio: 1.0,
-      ),
-      itemCount: _images.length,
-      itemBuilder: (context, index) {
-        return PhotoTile(
-          asset: _images[index],
-          assets: _images,
-          index: index,
-          // When an item is marked as deleted/restored, re-fetch the entire list
-          // to ensure the gallery is consistent.
-          onDeleted: _fetchAssets,
+    // Custom layout with hero tile and date-based sections - using slivers for smooth scrolling
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final double width = constraints.maxWidth;
+        final double tileSize = (width - 4) / 3; // 3 columns with 2px spacing
+
+        // Build sections with date breaks
+        final sections = _buildDateSections();
+
+        return CustomScrollView(
+          controller: _scrollController,
+          slivers: [
+            // Hero tile as sliver
+            SliverToBoxAdapter(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 2),
+                child: Container(
+                  width: tileSize * 3 + 4,
+                  height: tileSize * 3 + 4,
+                  child: PhotoTile(
+                    asset: _images[0],
+                    assets: _images,
+                    index: 0,
+                    onDeleted: _fetchAssets,
+                    isHero: true,
+                  ),
+                ),
+              ),
+            ),
+
+            // Spacing
+            const SliverToBoxAdapter(
+              child: SizedBox(height: 2),
+            ),
+
+            // Date sections as slivers
+            ...sections.map((section) {
+              final images = section['images'] as List<AssetEntity>;
+
+              return SliverMainAxisGroup(
+                slivers: [
+                  // Section header
+                  if (section['header'] != null)
+                    SliverToBoxAdapter(
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 24, 16, 12),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 4,
+                              height: 4,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFFF1E1E),
+                                boxShadow: [
+                                  BoxShadow(
+                                    color: const Color(0xFFFF1E1E).withValues(alpha: 0.5),
+                                    blurRadius: 4,
+                                    spreadRadius: 1,
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Text(
+                              section['header'] as String,
+                              style: GoogleFonts.ibmPlexMono(
+                                fontSize: 11,
+                                fontWeight: FontWeight.bold,
+                                letterSpacing: 1.5,
+                                color: const Color(0xFFFF1E1E),
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: Container(
+                                height: 1,
+                                color: const Color(0xFF1C1C1E),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+
+                  // Section grid as sliver
+                  SliverPadding(
+                    padding: const EdgeInsets.symmetric(horizontal: 2),
+                    sliver: SliverGrid(
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 3,
+                        crossAxisSpacing: 2,
+                        mainAxisSpacing: 2,
+                        childAspectRatio: 1.0,
+                      ),
+                      delegate: SliverChildBuilderDelegate(
+                        (context, index) {
+                          final asset = images[index];
+                          final actualIndex = _images.indexOf(asset);
+                          return PhotoTile(
+                            asset: asset,
+                            assets: _images,
+                            index: actualIndex,
+                            onDeleted: _fetchAssets,
+                          );
+                        },
+                        childCount: images.length,
+                      ),
+                    ),
+                  ),
+                ],
+              );
+            }).toList(),
+
+            // Loading indicator at bottom
+            if (_isLoadingMore)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.all(24.0),
+                  child: Center(
+                    child: Column(
+                      children: [
+                        const CircularProgressIndicator(
+                          color: Color(0xFFFF1E1E),
+                          strokeWidth: 2,
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          "LOADING MORE...",
+                          style: GoogleFonts.ibmPlexMono(
+                            fontSize: 10,
+                            color: const Color(0xFF8E8E93),
+                            letterSpacing: 1.5,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+
+            // End indicator
+            if (!_isLoadingMore && _images.length >= _totalAssetCount && _totalAssetCount > 0)
+              SliverToBoxAdapter(
+                child: Padding(
+                  padding: const EdgeInsets.all(24.0),
+                  child: Center(
+                    child: Text(
+                      "${_images.length} ITEMS LOADED",
+                      style: GoogleFonts.ibmPlexMono(
+                        fontSize: 10,
+                        color: const Color(0xFF8E8E93),
+                        letterSpacing: 1.5,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
         );
       },
     );
@@ -413,14 +762,32 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> with WidgetsBin
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Icon(Icons.lock_outline, size: 50, color: Color(0xFFD71921)),
+          const Icon(Icons.lock_outline, size: 50, color: Color(0xFFFF1E1E)),
           const SizedBox(height: 20),
-          const Text("PERMISSION REQUIRED"),
+          Text(
+            "PERMISSION REQUIRED",
+            style: GoogleFonts.ibmPlexMono(
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 1.5,
+              color: const Color(0xFFFFFFFF),
+            ),
+          ),
           const SizedBox(height: 20),
           ElevatedButton(
             onPressed: () => PhotoManager.openSetting(),
-            style: ElevatedButton.styleFrom(backgroundColor: Colors.white),
-            child: const Text("OPEN SETTINGS", style: TextStyle(color: Colors.black)),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFFFF1E1E),
+              foregroundColor: const Color(0xFF000000),
+            ),
+            child: Text(
+              "OPEN SETTINGS",
+              style: GoogleFonts.ibmPlexMono(
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
+                letterSpacing: 1.2,
+              ),
+            ),
           )
         ],
       ),
@@ -429,18 +796,18 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> with WidgetsBin
 
   Widget _buildNothingNavBar() {
     return Container(
-      padding: const EdgeInsets.symmetric(vertical: 20),
-      decoration: BoxDecoration(
-        color: Colors.black,
-        border: Border(top: BorderSide(color: Colors.grey[900]!)),
+      padding: const EdgeInsets.symmetric(vertical: 16),
+      decoration: const BoxDecoration(
+        color: Color(0xFF000000),
+        border: Border(top: BorderSide(color: Color(0xFF1C1C1E), width: 1)),
       ),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
-          _buildNavItem(0, "GALLERY"),
+          _buildNavItem(0, "PHOTOS"),
           _buildNavItem(1, "FOLDERS"),
           _buildNavItem(2, "SEARCH"),
-          _buildNavItem(3, "SEARCH 2"),
+          _buildNavItem(3, "BIN"),
         ],
       ),
     );
@@ -454,19 +821,35 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> with WidgetsBin
       },
       behavior: HitTestBehavior.opaque,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-        child: Row(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
           children: [
-            if (isSelected) ...[
-              const Icon(Icons.circle, size: 8, color: Color(0xFFD71921)),
-              const SizedBox(width: 8),
-            ],
+            if (isSelected)
+              Container(
+                width: 6,
+                height: 6,
+                margin: const EdgeInsets.only(bottom: 6),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFFF1E1E),
+                  boxShadow: [
+                    BoxShadow(
+                      color: const Color(0xFFFF1E1E).withValues(alpha: 0.6),
+                      blurRadius: 6,
+                      spreadRadius: 1,
+                    ),
+                  ],
+                ),
+              )
+            else
+              const SizedBox(height: 12),
             Text(
               label,
-              style: TextStyle(
-                color: isSelected ? Colors.white : Colors.grey[700],
-                fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+              style: GoogleFonts.ibmPlexMono(
+                fontSize: 10,
+                fontWeight: FontWeight.bold,
                 letterSpacing: 1.5,
+                color: isSelected ? const Color(0xFFFF1E1E) : const Color(0xFF8E8E93),
               ),
             ),
           ],

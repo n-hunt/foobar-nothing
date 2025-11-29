@@ -136,25 +136,55 @@ class _EditImageViewState extends State<EditImageView> {
     });
   }
 
+  // Apply filter to actual image bytes (not just visual)
+  Future<Uint8List> _applyFilterToBytes() async {
+    if (_loadedImage == null || _selectedFilterIndex == 0) {
+      // No filter or original - return current bytes
+      return _imageBytes!;
+    }
+
+    // Render the image with the color filter applied
+    final recorder = ui.PictureRecorder();
+    final canvas = Canvas(
+      recorder,
+      Rect.fromLTWH(0, 0, _loadedImage!.width.toDouble(), _loadedImage!.height.toDouble()),
+    );
+
+    // Apply the color filter matrix as a paint
+    final paint = Paint()
+      ..colorFilter = ColorFilter.matrix(_filters[_selectedFilterIndex]);
+
+    canvas.drawImage(_loadedImage!, Offset.zero, paint);
+
+    final picture = recorder.endRecording();
+    final img = await picture.toImage(_loadedImage!.width, _loadedImage!.height);
+    final byteData = await img.toByteData(format: ui.ImageByteFormat.png);
+
+    return byteData!.buffer.asUint8List();
+  }
+
   Future<void> _handleSave(bool overwrite) async {
     if (_imageFile == null) return;
     setState(() => _isProcessing = true);
 
     try {
+      // Apply filter to get final bytes
+      final finalBytes = await _applyFilterToBytes();
+
       if (overwrite) {
         // Simulate override for hackathon safety
         final originalFile = await widget.asset.file;
         if (originalFile != null) {
-          await originalFile.writeAsBytes(await _imageFile!.readAsBytes());
+          await originalFile.writeAsBytes(finalBytes);
           PaintingBinding.instance.imageCache.clear();
         }
       } else {
-        // FIX 1: Use 'filename' and force 'relativePath' to DCIM/Camera
-        final fileName = "Edit_${DateTime.now().millisecondsSinceEpoch}.jpg";
+        // Save filtered image as new copy
+        final fileName = "Edit_${DateTime.now().millisecondsSinceEpoch}.png";
         await PhotoManager.editor.saveImage(
-          await _imageFile!.readAsBytes(),
+          finalBytes,
           filename: fileName,
-          relativePath: "DCIM/Camera", // Ensure it goes to the main camera roll
+          relativePath: "DCIM/Camera",
         );
       }
 
