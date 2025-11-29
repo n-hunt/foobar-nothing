@@ -8,6 +8,7 @@ import 'folders_view.dart';
 import 'photo_tile.dart';
 import 'bin_service.dart';
 import 'debug_view.dart';
+import 'database/image_database.dart';
 
 void main() {
   runApp(const CactusApp());
@@ -57,6 +58,8 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> with WidgetsBin
 
   String _selectedCategory = 'CAMERA';
   final List<String> _categories = ['CAMERA', 'VIDEOS', 'SCREENS', 'ALL'];
+  
+  final ImageDatabase _db = ImageDatabase();
 
   @override
   void initState() {
@@ -192,6 +195,9 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> with WidgetsBin
 
     final visibleInitialMedia = initialMedia.where((a) => !BinService().isInBin(a.id)).toList();
 
+    // Insert images into database
+    await _insertAssetsToDatabase(visibleInitialMedia);
+
     if (mounted) {
       setState(() {
         _images = visibleInitialMedia;
@@ -214,13 +220,43 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> with WidgetsBin
           end: end,
         );
 
+        final visibleBatch = batch.where((a) => !BinService().isInBin(a.id)).toList();
+        await _insertAssetsToDatabase(visibleBatch);
+
         if (mounted) {
           setState(() {
-            _images.addAll(batch.where((a) => !BinService().isInBin(a.id)));
+            _images.addAll(visibleBatch);
           });
         }
 
         currentStart = end;
+      }
+    }
+  }
+
+  Future<void> _insertAssetsToDatabase(List<AssetEntity> assets) async {
+    for (final asset in assets) {
+      try {
+        // Check if image already exists
+        final exists = await _db.imageExists(asset.id);
+        if (exists) continue;
+
+        // Get file details
+        final file = await asset.file;
+        if (file == null) continue;
+
+        // Get file size
+        final fileSize = file.lengthSync();
+
+        // Insert into database
+        await _db.insertImage(
+          filePath: asset.id, // Use asset.id as unique identifier
+          fileName: asset.title ?? 'Unknown',
+          fileModifiedDate: asset.modifiedDateTime.millisecondsSinceEpoch ~/ 1000,
+          fileSizeBytes: fileSize,
+        );
+      } catch (e) {
+        debugPrint('Error inserting asset to database: $e');
       }
     }
   }
