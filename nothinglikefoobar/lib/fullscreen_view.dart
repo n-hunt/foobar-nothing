@@ -80,7 +80,10 @@ class _FullscreenImageViewState extends State<FullscreenImageView> {
     }
 
     ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text("Restored from Bin")),
+      const SnackBar(
+        content: Text("Restored from Bin"),
+        duration: Duration(milliseconds: 750),
+      ),
     );
 
     Navigator.pop(context);
@@ -115,19 +118,11 @@ class _FullscreenImageViewState extends State<FullscreenImageView> {
                 widget.onDeleted!();
               }
 
-              // Show snackbar with undo
+              // Show snackbar
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: const Text("Moved to Bin (30 Days left)"),
-                  duration: const Duration(milliseconds: 750), // Auto-dismiss after 0.75s
-                  action: SnackBarAction(
-                    label: "UNDO",
-                    textColor: const Color(0xFFD71921),
-                    onPressed: () {
-                      BinService().restore(asset);
-                      if (widget.onDeleted != null) widget.onDeleted!();
-                    },
-                  ),
+                const SnackBar(
+                  content: Text("Moved to Bin (30 Days left)"),
+                  duration: Duration(milliseconds: 750),
                 ),
               );
 
@@ -196,11 +191,6 @@ class _FullscreenImageViewState extends State<FullscreenImageView> {
           icon: const Icon(Icons.arrow_back, color: Colors.white),
           onPressed: () => Navigator.of(context).pop(),
         ),
-        title: Text(
-          "${_currentIndex + 1} / ${widget.assets.length}",
-          style: const TextStyle(color: Colors.white, fontSize: 12),
-        ),
-        centerTitle: true,
       ),
       body: Stack(
         children: [
@@ -230,7 +220,7 @@ class _FullscreenImageViewState extends State<FullscreenImageView> {
             left: 0,
             right: 0,
             child: Container(
-              color: Colors.black.withValues(alpha: 0.8),
+              color: const Color(0xFF000000).withValues(alpha: 0.95),
               padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 40),
               child: widget.isFromBin
                   ? Row(

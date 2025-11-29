@@ -115,15 +115,24 @@ class _FoldersViewState extends State<FoldersView> with WidgetsBindingObserver {
         children: [
           Text(
             "FOLDERS",
-            style: GoogleFonts.shareTechMono(fontSize: 28, fontWeight: FontWeight.bold),
+            style: GoogleFonts.dotGothic16(
+              fontSize: 28,
+              fontWeight: FontWeight.bold,
+              letterSpacing: 2.0,
+              color: const Color(0xFFFFFFFF),
+            ),
           ),
           const SizedBox(height: 8),
           Text(
             "${_albums.length + 1} COLLECTIONS FOUND", // +1 for bin
-            style: TextStyle(color: Colors.grey[600], fontSize: 12, letterSpacing: 1.2),
+            style: GoogleFonts.ibmPlexMono(
+              color: const Color(0xFF8E8E93),
+              fontSize: 11,
+              letterSpacing: 1.2,
+            ),
           ),
           const SizedBox(height: 10),
-          Container(height: 1, color: Colors.grey[800]),
+          Container(height: 1, color: const Color(0xFF1C1C1E)),
         ],
       ),
     );
@@ -206,17 +215,37 @@ class _BinDetailViewState extends State<BinDetailView> {
               icon: const Icon(Icons.arrow_back, color: Colors.white),
               onPressed: () => Navigator.pop(context),
             ),
-            title: Text("BIN", style: GoogleFonts.shareTechMono(color: Colors.white)),
+            title: Text(
+              "BIN",
+              style: GoogleFonts.dotGothic16(
+                color: const Color(0xFFFFFFFF),
+                fontSize: 18,
+                letterSpacing: 2.0,
+              ),
+            ),
             actions: [
               if (binAssets.isNotEmpty)
                 TextButton(
                   onPressed: () async {
                     await BinService().emptyBin();
                     if (context.mounted) {
-                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Bin Empty")));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text("Bin Empty"),
+                          duration: Duration(milliseconds: 750),
+                        ),
+                      );
                     }
                   },
-                  child: Text("EMPTY BIN", style: GoogleFonts.shareTechMono(color: const Color(0xFFD71921))),
+                  child: Text(
+                    "EMPTY BIN",
+                    style: GoogleFonts.ibmPlexMono(
+                      color: const Color(0xFFFF1E1E),
+                      fontSize: 10,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1.2,
+                    ),
+                  ),
                 )
             ],
           ),
@@ -233,9 +262,16 @@ class _BinDetailViewState extends State<BinDetailView> {
       child: Column(
         mainAxisAlignment: MainAxisAlignment.center,
         children: [
-          const Icon(Icons.delete_outline, color: Colors.grey, size: 64),
+          const Icon(Icons.delete_outline, color: Color(0xFF8E8E93), size: 64),
           const SizedBox(height: 16),
-          Text("NO ITEMS IN BIN", style: GoogleFonts.shareTechMono(color: Colors.grey)),
+          Text(
+            "NO ITEMS IN BIN",
+            style: GoogleFonts.ibmPlexMono(
+              color: const Color(0xFF8E8E93),
+              fontSize: 11,
+              letterSpacing: 1.2,
+            ),
+          ),
         ],
       ),
     );
@@ -290,7 +326,10 @@ class _BinDetailViewState extends State<BinDetailView> {
                   Navigator.pop(ctx);
                   BinService().restore(asset);
                   ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text("Restored from Bin")),
+                    const SnackBar(
+                      content: Text("Restored from Bin"),
+                      duration: Duration(milliseconds: 750),
+                    ),
                   );
                 },
               ),
@@ -304,7 +343,10 @@ class _BinDetailViewState extends State<BinDetailView> {
                   BinService().restore(asset); // Remove from bin tracking
                   if (context.mounted) {
                     ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text("Permanently deleted (simulated)")),
+                      const SnackBar(
+                        content: Text("Permanently deleted (simulated)"),
+                        duration: Duration(milliseconds: 750),
+                      ),
                     );
                   }
                 },

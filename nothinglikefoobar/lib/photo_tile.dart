@@ -17,6 +17,7 @@ class PhotoTile extends StatelessWidget {
   final List<AssetEntity> assets;
   final int index;
   final VoidCallback? onDeleted;
+  final bool isHero;
 
   const PhotoTile({
     super.key,
@@ -24,61 +25,76 @@ class PhotoTile extends StatelessWidget {
     required this.assets,
     required this.index,
     this.onDeleted,
+    this.isHero = false,
   });
 
   @override
   Widget build(BuildContext context) {
-    // OPTIMIZATION: Use smaller thumbnail size for grid
+    // OPTIMIZATION: Use larger thumbnail for hero image, smaller for regular grid
     final imageProvider = AssetEntityImageProvider(
       asset,
-      thumbnailSize: const ThumbnailSize.square(150), // Reduced from 200
+      thumbnailSize: isHero
+          ? const ThumbnailSize.square(450) // Larger for hero (3x3)
+          : const ThumbnailSize.square(150), // Regular size
     );
 
     return GestureDetector(
       onTap: () => _openFullscreen(context),
       onLongPress: () => _showOptionsSheet(context),
-      child: Hero(
-        tag: asset.id,
-        child: Stack(
-          fit: StackFit.expand,
-          children: [
-            // OPTIMIZATION: Use Image.network style caching
-            Image(
-              image: imageProvider,
-              fit: BoxFit.cover,
-              frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
-                if (wasSynchronouslyLoaded) return child;
-                return AnimatedOpacity(
-                  opacity: frame == null ? 0 : 1,
-                  duration: const Duration(milliseconds: 200),
-                  curve: Curves.easeOut,
-                  child: child,
-                );
-              },
-              errorBuilder: (context, error, stackTrace) {
-                return Container(
-                  color: Colors.grey[900],
-                  child: const Center(
-                    child: Icon(Icons.broken_image, color: Colors.grey, size: 20),
-                  ),
-                );
-              },
-              // OPTIMIZATION: Enable memory caching
-              gaplessPlayback: true,
-            ),
-            if (asset.type == AssetType.video)
-              Align(
-                alignment: Alignment.center,
-                child: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.black.withValues(alpha: 0.5),
-                    shape: BoxShape.circle,
-                  ),
-                  child: const Icon(Icons.play_arrow, color: Colors.white, size: 20),
-                ),
+      child: Container(
+        width: double.infinity,
+        height: double.infinity,
+        child: Hero(
+          tag: asset.id,
+          child: Stack(
+            fit: StackFit.expand,
+            children: [
+              // OPTIMIZATION: Use Image.network style caching
+              Image(
+                image: imageProvider,
+                fit: BoxFit.cover,
+                frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+                  if (wasSynchronouslyLoaded) return child;
+                  return AnimatedOpacity(
+                    opacity: frame == null ? 0 : 1,
+                    duration: const Duration(milliseconds: 200),
+                    curve: Curves.easeOut,
+                    child: child,
+                  );
+                },
+                errorBuilder: (context, error, stackTrace) {
+                  return Container(
+                    color: const Color(0xFF1C1C1E),
+                    child: Center(
+                      child: Icon(
+                        Icons.broken_image,
+                        color: const Color(0xFF8E8E93),
+                        size: isHero ? 60 : 20,
+                      ),
+                    ),
+                  );
+                },
+                // OPTIMIZATION: Enable memory caching
+                gaplessPlayback: true,
               ),
-          ],
+              if (asset.type == AssetType.video)
+                Align(
+                  alignment: Alignment.center,
+                  child: Container(
+                    padding: EdgeInsets.all(isHero ? 16 : 8),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.5),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.play_arrow,
+                      color: Colors.white,
+                      size: isHero ? 48 : 20,
+                    ),
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );
@@ -249,17 +265,9 @@ class PhotoTile extends StatelessWidget {
               }
 
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: const Text("Moved to Bin (30 Days left)"),
-                  duration: const Duration(milliseconds: 750), // Auto-dismiss after 0.75s
-                  action: SnackBarAction(
-                    label: "UNDO",
-                    textColor: const Color(0xFFD71921),
-                    onPressed: () {
-                      BinService().restore(asset);
-                      if (onDeleted != null) onDeleted!(); // Refresh again
-                    },
-                  ),
+                const SnackBar(
+                  content: Text("Moved to Bin (30 Days left)"),
+                  duration: Duration(milliseconds: 750),
                 ),
               );
             },

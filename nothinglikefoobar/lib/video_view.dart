@@ -22,6 +22,7 @@ class _SingleVideoPlayerState extends State<SingleVideoPlayer> {
   double _currentSliderValue = 0.0;
   String _durationString = "00:00";
   String _positionString = "00:00";
+  bool _isDraggingSlider = false; // Track if user is dragging slider
 
   @override
   void initState() {
@@ -51,6 +52,9 @@ class _SingleVideoPlayerState extends State<SingleVideoPlayer> {
 
       if (!mounted) return;
 
+      // Enable looping
+      _controller!.setLooping(true);
+
       setState(() {
         _initialized = true;
         _durationString = _formatDuration(_controller!.value.duration);
@@ -75,16 +79,13 @@ class _SingleVideoPlayerState extends State<SingleVideoPlayer> {
     final double position = _controller!.value.position.inMilliseconds.toDouble();
     final double duration = _controller!.value.duration.inMilliseconds.toDouble();
 
-    if (mounted) {
+    if (mounted && !_isDraggingSlider) {
       setState(() {
-        _currentSliderValue = position;
+        // Clamp the value to prevent slider from exceeding max
+        _currentSliderValue = position.clamp(0.0, duration);
         _positionString = _formatDuration(_controller!.value.position);
         _isPlaying = _controller!.value.isPlaying;
       });
-    }
-
-    if (position >= duration && duration > 0) {
-      setState(() => _isPlaying = false);
     }
   }
 
@@ -177,13 +178,18 @@ class _SingleVideoPlayerState extends State<SingleVideoPlayer> {
 
   Widget _buildControls() {
     return Positioned(
-      bottom: 0, left: 0, right: 0,
+      bottom: 80, // Moved up to be above the action buttons
+      left: 0,
+      right: 0,
       child: Container(
-        padding: const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(20),
         decoration: BoxDecoration(
           gradient: LinearGradient(
             begin: Alignment.bottomCenter, end: Alignment.topCenter,
-            colors: [Colors.black.withValues(alpha: 0.9), Colors.transparent],
+            colors: [
+              const Color(0xFF000000).withValues(alpha: 0.95),
+              const Color(0xFF000000).withValues(alpha: 0.0),
+            ],
           ),
         ),
         child: Column(
@@ -192,26 +198,46 @@ class _SingleVideoPlayerState extends State<SingleVideoPlayer> {
               children: [
                 IconButton(
                   onPressed: _togglePlay,
-                  icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow, color: Colors.white, size: 32),
+                  icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow, color: const Color(0xFFFFFFFF), size: 28),
                 ),
                 const SizedBox(width: 8),
-                Text("$_positionString / $_durationString", style: GoogleFonts.shareTechMono(color: Colors.white, fontSize: 12)),
+                Text(
+                  "$_positionString / $_durationString",
+                  style: GoogleFonts.ibmPlexMono(
+                    color: const Color(0xFFFFFFFF),
+                    fontSize: 11,
+                    letterSpacing: 1.0,
+                  ),
+                ),
               ],
             ),
             SliderTheme(
               data: SliderThemeData(
-                activeTrackColor: const Color(0xFFD71921),
-                thumbColor: const Color(0xFFD71921),
-                overlayColor: const Color(0xFFD71921).withValues(alpha: 0.2),
+                activeTrackColor: const Color(0xFFFF1E1E),
+                thumbColor: const Color(0xFFFF1E1E),
+                overlayColor: const Color(0xFFFF1E1E).withValues(alpha: 0.3),
                 trackHeight: 2.0,
                 thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6.0),
+                inactiveTrackColor: const Color(0xFF1C1C1E),
               ),
               child: Slider(
-                value: _currentSliderValue,
+                value: _currentSliderValue.clamp(0.0, _controller!.value.duration.inMilliseconds.toDouble()),
                 min: 0.0,
-                max: _controller!.value.duration.inMilliseconds.toDouble(),
-                onChanged: (value) => setState(() => _currentSliderValue = value),
-                onChangeEnd: (value) => _seekTo(value),
+                max: _controller!.value.duration.inMilliseconds.toDouble().clamp(1.0, double.infinity),
+                onChanged: (value) {
+                  setState(() {
+                    _isDraggingSlider = true;
+                    _currentSliderValue = value;
+                    _positionString = _formatDuration(Duration(milliseconds: value.toInt()));
+                  });
+                },
+                onChangeStart: (value) {
+                  setState(() => _isDraggingSlider = true);
+                },
+                onChangeEnd: (value) {
+                  _seekTo(value);
+                  setState(() => _isDraggingSlider = false);
+                },
               ),
             ),
           ],
