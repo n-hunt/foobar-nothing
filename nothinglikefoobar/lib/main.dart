@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // Add this import for MethodCall
 import 'package:google_fonts/google_fonts.dart';
 import 'package:photo_manager/photo_manager.dart';
 
@@ -47,7 +48,7 @@ class NothingGalleryHome extends StatefulWidget {
 
 enum GallerySortOrder { recent, oldest }
 
-class _NothingGalleryHomeState extends State<NothingGalleryHome> {
+class _NothingGalleryHomeState extends State<NothingGalleryHome> with WidgetsBindingObserver {
   int _selectedIndex = 0;
   List<AssetEntity> _images = [];
   bool _isLoading = true;
@@ -60,12 +61,45 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _fetchAssets();
+    // Listen to BinService updates
+    BinService().addListener(_fetchAssets);
+
+    // OPTIMIZATION: Listen for new photos/videos being added
+    PhotoManager.addChangeCallback(_onPhotoManagerChange);
+    PhotoManager.startChangeNotify();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    BinService().removeListener(_fetchAssets);
+    PhotoManager.removeChangeCallback(_onPhotoManagerChange);
+    PhotoManager.stopChangeNotify();
+    super.dispose();
+  }
+
+  // ENHANCEMENT: Detect when app comes to foreground
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      // Refresh when returning from camera
+      _fetchAssets();
+    }
+  }
+
+  void _onPhotoManagerChange(MethodCall call) {
+    // ENHANCEMENT: Immediate refresh on any gallery change
+    debugPrint("Gallery changed: ${call.method}");
     _fetchAssets();
   }
 
   Future<void> _fetchAssets() async {
-    // Only show loading spinner if we have absolutely nothing
-    if (_images.isEmpty) setState(() => _isLoading = true);
+    // OPTIMIZATION: Don't show loading spinner on refresh, only on first load
+    final bool isInitialLoad = _images.isEmpty;
+    if (isInitialLoad) setState(() => _isLoading = true);
 
     final PermissionState ps = await PhotoManager.requestPermissionExtend();
 
@@ -100,11 +134,13 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
     );
 
     if (albums.isEmpty) {
-      setState(() {
-        _isLoading = false;
-        _hasPermission = true;
-        _images = [];
-      });
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _hasPermission = true;
+          _images = [];
+        });
+      }
       return;
     }
 
@@ -125,43 +161,68 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
 
     final int assetCount = await targetAlbum.assetCountAsync;
 
-    // --- OPTIMIZATION START ---
-    // Instead of waiting for ALL 5000 photos to load meta-data,
-    // we grab the first 60 instantly to render the UI.
-    const int firstPageSize = 60;
+    // ENHANCEMENT: For refresh (not initial load), just get latest items and merge
+    if (!isInitialLoad && assetCount > _images.length) {
+      // New items detected - fetch just the new ones
+      final int newItemsCount = assetCount - _images.length;
+      final List<AssetEntity> newMedia = await targetAlbum.getAssetListRange(
+        start: 0,
+        end: newItemsCount,
+      );
 
-    // 1. Load First Page (Instant)
-    final List<AssetEntity> firstBatch = await targetAlbum.getAssetListRange(
+      final visibleNewMedia = newMedia.where((a) => !BinService().isInBin(a.id)).toList();
+
+      if (mounted) {
+        setState(() {
+          // Add new items to the front (recent first)
+          _images.insertAll(0, visibleNewMedia);
+          _hasPermission = true;
+        });
+      }
+      return;
+    }
+
+    // OPTIMIZATION: Load first 30 items immediately for initial load
+    const int firstBatch = 30;
+
+    final List<AssetEntity> initialMedia = await targetAlbum.getAssetListRange(
       start: 0,
-      end: assetCount < firstPageSize ? assetCount : firstPageSize,
+      end: assetCount < firstBatch ? assetCount : firstBatch,
     );
+
+    final visibleInitialMedia = initialMedia.where((a) => !BinService().isInBin(a.id)).toList();
 
     if (mounted) {
       setState(() {
-        // Filter bin items immediately
-        _images = firstBatch.where((a) => !BinService().isInBin(a)).toList();
+        _images = visibleInitialMedia;
         _isLoading = false;
         _hasPermission = true;
       });
     }
 
-    // 2. Load Remainder (Background)
-    if (assetCount > firstPageSize) {
-      // Small delay to let the UI frame render
-      await Future.delayed(const Duration(milliseconds: 100));
+    // Load remaining in batches to avoid blocking
+    if (assetCount > firstBatch) {
+      const int batchSize = 100;
+      int currentStart = firstBatch;
 
-      final List<AssetEntity> remaining = await targetAlbum.getAssetListRange(
-        start: firstPageSize,
-        end: assetCount,
-      );
+      while (currentStart < assetCount) {
+        await Future.delayed(const Duration(milliseconds: 50));
 
-      if (mounted) {
-        setState(() {
-          _images.addAll(remaining.where((a) => !BinService().isInBin(a)));
-        });
+        final int end = (currentStart + batchSize) > assetCount ? assetCount : currentStart + batchSize;
+        final List<AssetEntity> batch = await targetAlbum.getAssetListRange(
+          start: currentStart,
+          end: end,
+        );
+
+        if (mounted) {
+          setState(() {
+            _images.addAll(batch.where((a) => !BinService().isInBin(a.id)));
+          });
+        }
+
+        currentStart = end;
       }
     }
-    // --- OPTIMIZATION END ---
   }
 
   void _toggleSortOrder() {
@@ -339,11 +400,9 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
           asset: _images[index],
           assets: _images,
           index: index,
-          onDeleted: () {
-            setState(() {
-              _images.removeAt(index);
-            });
-          },
+          // When an item is marked as deleted/restored, re-fetch the entire list
+          // to ensure the gallery is consistent.
+          onDeleted: _fetchAssets,
         );
       },
     );
@@ -390,7 +449,9 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
   Widget _buildNavItem(int index, String label) {
     final bool isSelected = _selectedIndex == index;
     return GestureDetector(
-      onTap: () => setState(() => _selectedIndex = index),
+      onTap: () {
+        setState(() => _selectedIndex = index);
+      },
       behavior: HitTestBehavior.opaque,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
