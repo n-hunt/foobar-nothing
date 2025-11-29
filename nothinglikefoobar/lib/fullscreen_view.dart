@@ -7,17 +7,22 @@ import 'package:share_plus/share_plus.dart';
 
 import 'video_view.dart';
 import 'edit_image_view.dart'; // Import Edit View
+import 'bin_service.dart';
 
 class FullscreenImageView extends StatefulWidget {
   final List<AssetEntity> assets;
   final int initialIndex;
   final Uint8List? thumbnailBytes;
+  final VoidCallback? onDeleted;
+  final bool isFromBin; // Add this parameter
 
   const FullscreenImageView({
     super.key,
     required this.assets,
     required this.initialIndex,
     this.thumbnailBytes,
+    this.onDeleted,
+    this.isFromBin = false, // Default to false
   });
 
   @override
@@ -61,7 +66,25 @@ class _FullscreenImageViewState extends State<FullscreenImageView> {
     }
   }
 
+  void _handleRestore() {
+    final AssetEntity asset = widget.assets[_currentIndex];
+
+    BinService().restore(asset);
+
+    if (widget.onDeleted != null) {
+      widget.onDeleted!();
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text("Restored from Bin")),
+    );
+
+    Navigator.pop(context);
+  }
+
   void _handleDelete() {
+    final AssetEntity asset = widget.assets[_currentIndex];
+
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
@@ -79,13 +102,78 @@ class _FullscreenImageViewState extends State<FullscreenImageView> {
           TextButton(
             onPressed: () {
               Navigator.pop(ctx); // Close dialog
-              // Logic to remove from list would go here in a real app
+
+              // Add to BinService
+              BinService().addToBin(asset);
+
+              // Notify parent to refresh
+              if (widget.onDeleted != null) {
+                widget.onDeleted!();
+              }
+
+              // Show snackbar with undo
               ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text("Moved to Bin")),
+                SnackBar(
+                  content: const Text("Moved to Bin (30 Days left)"),
+                  duration: const Duration(milliseconds: 750), // Auto-dismiss after 0.75s
+                  action: SnackBarAction(
+                    label: "UNDO",
+                    textColor: const Color(0xFFD71921),
+                    onPressed: () {
+                      BinService().restore(asset);
+                      if (widget.onDeleted != null) widget.onDeleted!();
+                    },
+                  ),
+                ),
               );
+
               Navigator.pop(context); // Close fullscreen
             },
-            child: const Text("BIN", style: TextStyle(color: Color(0xFFD71921))),
+            child: const Text("MOVE TO BIN", style: TextStyle(color: Color(0xFFD71921))),
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _handlePermanentDelete() {
+    final AssetEntity asset = widget.assets[_currentIndex];
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: Colors.grey[900],
+        title: Text("Delete Permanently?", style: GoogleFonts.shareTechMono(color: const Color(0xFFD71921))),
+        content: const Text(
+          "This action cannot be undone.",
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text("CANCEL", style: TextStyle(color: Colors.white)),
+          ),
+          TextButton(
+            onPressed: () async {
+              Navigator.pop(ctx);
+
+              // Uncomment for production:
+              // await PhotoManager.editor.deleteWithIds([asset.id]);
+
+              BinService().restore(asset); // Remove from bin tracking
+
+              if (widget.onDeleted != null) {
+                widget.onDeleted!();
+              }
+
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  const SnackBar(content: Text("Permanently deleted (simulated)")),
+                );
+                Navigator.pop(context);
+              }
+            },
+            child: const Text("DELETE", style: TextStyle(color: Color(0xFFD71921))),
           ),
         ],
       ),
@@ -132,22 +220,39 @@ class _FullscreenImageViewState extends State<FullscreenImageView> {
             },
           ),
 
-          // 2. Bottom Action Bar (Google Photos Style)
+          // 2. Bottom Action Bar (Different for Bin vs Gallery)
           Positioned(
             bottom: 0,
             left: 0,
             right: 0,
             child: Container(
-              color: Colors.black.withValues(alpha: 0.8),
+              color: Colors.black.withOpacity(0.8),
               padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 40),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  _ActionButton(icon: Icons.share_outlined, label: "Share", onTap: _handleShare),
-                  _ActionButton(icon: Icons.edit_outlined, label: "Edit", onTap: _handleEdit),
-                  _ActionButton(icon: Icons.delete_outline, label: "Bin", onTap: _handleDelete, isDestructive: true),
-                ],
-              ),
+              child: widget.isFromBin
+                  ? Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: [
+                        _ActionButton(
+                          icon: Icons.restore,
+                          label: "Restore",
+                          onTap: _handleRestore,
+                        ),
+                        _ActionButton(
+                          icon: Icons.delete_forever,
+                          label: "Delete",
+                          onTap: _handlePermanentDelete,
+                          isDestructive: true,
+                        ),
+                      ],
+                    )
+                  : Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        _ActionButton(icon: Icons.share_outlined, label: "Share", onTap: _handleShare),
+                        _ActionButton(icon: Icons.edit_outlined, label: "Edit", onTap: _handleEdit),
+                        _ActionButton(icon: Icons.delete_outline, label: "Bin", onTap: _handleDelete, isDestructive: true),
+                      ],
+                    ),
             ),
           ),
         ],

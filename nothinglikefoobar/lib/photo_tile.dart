@@ -27,49 +27,34 @@ class PhotoTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    // OPTIMIZATION: Use smaller thumbnail size for grid
     final imageProvider = AssetEntityImageProvider(
       asset,
-      // OPTIMIZATION: Reduced from 300 to 200.
-      // 200x200 is sufficient for 3-column grid and loads much faster.
-      thumbnailSize: const ThumbnailSize.square(200),
+      thumbnailSize: const ThumbnailSize.square(150), // Reduced from 200
     );
 
     return GestureDetector(
-      onTap: () async {
-        Uint8List? bytes;
-        try {
-          if (asset.type == AssetType.image) {
-            bytes = await asset.thumbnailDataWithSize(const ThumbnailSize.square(300));
-          }
-        } catch (e) {
-          // Ignore thumbnail errors
-        }
-
-        if (context.mounted) {
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (context) => FullscreenImageView(
-                assets: assets,
-                initialIndex: index,
-                thumbnailBytes: bytes,
-              ),
-            ),
-          );
-        }
-      },
+      onTap: () => _openFullscreen(context),
       onLongPress: () => _showOptionsSheet(context),
       child: Hero(
         tag: asset.id,
         child: Stack(
           fit: StackFit.expand,
           children: [
-            FadeInImage(
-              placeholder: MemoryImage(kTransparentImage),
+            // OPTIMIZATION: Use Image.network style caching
+            Image(
               image: imageProvider,
               fit: BoxFit.cover,
-              fadeInDuration: const Duration(milliseconds: 200),
-              excludeFromSemantics: true,
-              imageErrorBuilder: (context, error, stackTrace) {
+              frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+                if (wasSynchronouslyLoaded) return child;
+                return AnimatedOpacity(
+                  opacity: frame == null ? 0 : 1,
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeOut,
+                  child: child,
+                );
+              },
+              errorBuilder: (context, error, stackTrace) {
                 return Container(
                   color: Colors.grey[900],
                   child: const Center(
@@ -77,6 +62,8 @@ class PhotoTile extends StatelessWidget {
                   ),
                 );
               },
+              // OPTIMIZATION: Enable memory caching
+              gaplessPlayback: true,
             ),
             if (asset.type == AssetType.video)
               Align(
@@ -94,6 +81,32 @@ class PhotoTile extends StatelessWidget {
         ),
       ),
     );
+  }
+
+  Future<void> _openFullscreen(BuildContext context) async {
+    // OPTIMIZATION: Load thumbnail in background while opening
+    Uint8List? bytes;
+    if (asset.type == AssetType.image) {
+      // Don't await - let it load in background
+      asset.thumbnailDataWithSize(const ThumbnailSize.square(300)).then((data) {
+        bytes = data;
+      }).catchError((e) {
+        // Ignore errors
+      });
+    }
+
+    if (context.mounted) {
+      Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => FullscreenImageView(
+            assets: assets,
+            initialIndex: index,
+            thumbnailBytes: bytes,
+            onDeleted: onDeleted,
+          ),
+        ),
+      );
+    }
   }
 
   void _showOptionsSheet(BuildContext context) {
@@ -208,10 +221,10 @@ class PhotoTile extends StatelessWidget {
             onPressed: () {
               Navigator.pop(ctx); // Close dialog
 
-              // 1. Add to Bin Service
+              // 1. Add to Bin Service (uses stable ID)
               BinService().addToBin(asset);
 
-              // 2. Notify Parent to refresh UI
+              // 2. Trigger refresh in the parent grid
               if (onDeleted != null) {
                 onDeleted!();
               }
@@ -219,6 +232,7 @@ class PhotoTile extends StatelessWidget {
               ScaffoldMessenger.of(context).showSnackBar(
                 SnackBar(
                   content: const Text("Moved to Bin (30 Days left)"),
+                  duration: const Duration(milliseconds: 750), // Auto-dismiss after 0.75s
                   action: SnackBarAction(
                     label: "UNDO",
                     textColor: const Color(0xFFD71921),

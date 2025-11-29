@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // Add this import
 import 'package:google_fonts/google_fonts.dart';
 import 'package:photo_manager/photo_manager.dart';
-import 'package:transparent_image/transparent_image.dart';
 import 'dart:typed_data';
 
 import 'folder_detail_view.dart';
 import 'photo_tile.dart';
 import 'bin_service.dart';
+import 'fullscreen_view.dart'; // Add this import
 
 class FoldersView extends StatefulWidget {
   const FoldersView({super.key});
@@ -15,14 +16,37 @@ class FoldersView extends StatefulWidget {
   State<FoldersView> createState() => _FoldersViewState();
 }
 
-class _FoldersViewState extends State<FoldersView> {
+class _FoldersViewState extends State<FoldersView> with WidgetsBindingObserver {
   List<AssetPathEntity> _albums = [];
   bool _isLoading = true;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _fetchAlbums();
+
+    // Listen for gallery changes
+    PhotoManager.addChangeCallback(_onPhotoChange);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    PhotoManager.removeChangeCallback(_onPhotoChange);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      _fetchAlbums();
+    }
+  }
+
+  void _onPhotoChange(MethodCall call) {
+    if (mounted) _fetchAlbums();
   }
 
   Future<void> _fetchAlbums() async {
@@ -33,7 +57,7 @@ class _FoldersViewState extends State<FoldersView> {
     }
 
     final albums = await PhotoManager.getAssetPathList(
-      type: RequestType.common, // CHANGED: Show folders with videos too
+      type: RequestType.common,
       hasAll: true,
     );
 
@@ -66,7 +90,11 @@ class _FoldersViewState extends State<FoldersView> {
             itemCount: totalCount,
             itemBuilder: (context, index) {
               if (index == 1) {
-                return const _BinTile();
+                // Bin Tile uses ValueListenableBuilder for reactive count
+                return ValueListenableBuilder<List<String>>(
+                  valueListenable: BinService().binnedIdsListenable,
+                  builder: (context, binnedIds, child) => const _BinTile(),
+                );
               }
               final albumIndex = index > 1 ? index - 1 : index;
               return _AlbumTile(album: _albums[albumIndex]);
@@ -111,10 +139,7 @@ class _BinTile extends StatelessWidget {
         Navigator.push(
           context,
           MaterialPageRoute(builder: (context) => const BinDetailView()),
-        ).then((_) {
-          // Force refresh when coming back from bin (in case restored items moved)
-          // (Requires converting FoldersView to listenable or using setstate in parent)
-        });
+        );
       },
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -124,7 +149,7 @@ class _BinTile extends StatelessWidget {
               decoration: BoxDecoration(
                 color: Colors.grey[900],
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFFD71921).withValues(alpha: 0.3)),
+                border: Border.all(color: const Color(0xFFD71921).withOpacity(0.3)),
               ),
               child: const Center(
                 child: Column(
@@ -154,7 +179,7 @@ class _BinTile extends StatelessWidget {
   }
 }
 
-// --- BIN VIEW (Updated to use Service) ---
+// --- BIN VIEW (Updated to use Service assets) ---
 class BinDetailView extends StatefulWidget {
   const BinDetailView({super.key});
 
@@ -166,33 +191,38 @@ class _BinDetailViewState extends State<BinDetailView> {
 
   @override
   Widget build(BuildContext context) {
-    // Get assets directly from memory (Instant load)
-    final binAssets = BinService().assets;
+    return ValueListenableBuilder<List<String>>(
+      valueListenable: BinService().binnedIdsListenable,
+      builder: (context, binnedIds, child) {
+        final binAssets = BinService().assets; // Get the AssetEntity list
 
-    return Scaffold(
-      backgroundColor: Colors.black,
-      appBar: AppBar(
-        backgroundColor: Colors.black,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: Colors.white),
-          onPressed: () => Navigator.pop(context),
-        ),
-        title: Text("BIN", style: GoogleFonts.shareTechMono(color: Colors.white)),
-        actions: [
-          if (binAssets.isNotEmpty)
-            TextButton(
-              onPressed: () async {
-                await BinService().emptyBin();
-                setState(() {}); // Refresh UI
-                ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Bin Empty")));
-              },
-              child: Text("EMPTY BIN", style: GoogleFonts.shareTechMono(color: const Color(0xFFD71921))),
-            )
-        ],
-      ),
-      body: binAssets.isEmpty
-          ? _buildEmptyState()
-          : _buildGrid(binAssets),
+        return Scaffold(
+          backgroundColor: Colors.black,
+          appBar: AppBar(
+            backgroundColor: Colors.black,
+            leading: IconButton(
+              icon: const Icon(Icons.arrow_back, color: Colors.white),
+              onPressed: () => Navigator.pop(context),
+            ),
+            title: Text("BIN", style: GoogleFonts.shareTechMono(color: Colors.white)),
+            actions: [
+              if (binAssets.isNotEmpty)
+                TextButton(
+                  onPressed: () async {
+                    await BinService().emptyBin();
+                    if (context.mounted) {
+                      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text("Bin Empty")));
+                    }
+                  },
+                  child: Text("EMPTY BIN", style: GoogleFonts.shareTechMono(color: const Color(0xFFD71921))),
+                )
+            ],
+          ),
+          body: binAssets.isEmpty
+              ? _buildEmptyState()
+              : _buildGrid(binAssets),
+        );
+      },
     );
   }
 
@@ -217,101 +247,65 @@ class _BinDetailViewState extends State<BinDetailView> {
       ),
       itemCount: assets.length,
       itemBuilder: (context, index) {
-        return PhotoTile(
-          asset: assets[index],
-          assets: assets,
-          index: index,
-          onDeleted: () {
-            // In the Bin, "Delete" usually means "Delete Permanently" or "Restore"
-            // For now, we assume it triggers a refresh
-            setState(() {});
+        return GestureDetector(
+          onTap: () {
+            Navigator.push(
+              context,
+              MaterialPageRoute(
+                builder: (context) => FullscreenImageView(
+                  assets: assets,
+                  initialIndex: index,
+                ),
+              ),
+            );
           },
+          onLongPress: () => _showRestoreOption(context, assets[index]),
+          child: PhotoTile(
+            asset: assets[index],
+            assets: assets,
+            index: index,
+            onDeleted: () {}, // Already handled by ValueNotifier
+          ),
         );
       },
     );
   }
-}
 
-// --- ALBUM TILE ---
-class _AlbumTile extends StatelessWidget {
-  final AssetPathEntity album;
-
-  const _AlbumTile({required this.album});
-
-  @override
-  Widget build(BuildContext context) {
-    return FutureBuilder<List<AssetEntity>>(
-      future: album.getAssetListRange(start: 0, end: 1),
-      builder: (context, snapshot) {
-        AssetEntity? coverAsset;
-        if (snapshot.hasData && snapshot.data!.isNotEmpty) {
-          coverAsset = snapshot.data!.first;
-        }
-
-        return GestureDetector(
-          onTap: () {
-            Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (context) => FolderDetailView(album: album),
-              ),
-            );
-          },
+  void _showRestoreOption(BuildContext context, AssetEntity asset) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.black,
+      builder: (ctx) {
+        return Container(
+          padding: const EdgeInsets.all(24),
           child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
             children: [
-              Expanded(
-                child: Container(
-                  decoration: BoxDecoration(
-                    color: Colors.grey[900],
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
-                  ),
-                  clipBehavior: Clip.antiAlias,
-                  child: coverAsset != null
-                      ? FutureBuilder<Uint8List?>(
-                    future: coverAsset.thumbnailDataWithSize(const ThumbnailSize(400, 400)),
-                    builder: (context, thumbSnapshot) {
-                      if (thumbSnapshot.hasData) {
-                        return FadeInImage(
-                          placeholder: MemoryImage(kTransparentImage),
-                          image: MemoryImage(thumbSnapshot.data!),
-                          fit: BoxFit.cover,
-                        );
-                      }
-                      return Container();
-                    },
-                  )
-                      : const Center(
-                    child: Icon(Icons.folder_open, color: Colors.grey, size: 40),
-                  ),
-                ),
+              ListTile(
+                leading: const Icon(Icons.restore, color: Color(0xFFD71921)),
+                title: Text("RESTORE", style: GoogleFonts.shareTechMono(color: Colors.white)),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  BinService().restore(asset);
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text("Restored from Bin")),
+                  );
+                },
               ),
-              const SizedBox(height: 12),
-              Text(
-                album.name.toUpperCase(),
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                  fontWeight: FontWeight.bold,
-                  color: Colors.white,
-                  fontSize: 14,
-                ),
-              ),
-              const SizedBox(height: 4),
-              Row(
-                children: [
-                  FutureBuilder<int>(
-                    future: album.assetCountAsync,
-                    builder: (context, countSnapshot) {
-                      return Text(
-                        "${countSnapshot.data ?? 0} FILES",
-                        style: TextStyle(color: Colors.grey[600], fontSize: 10),
-                      );
-                    },
-                  ),
-                  const Spacer(),
-                  const Icon(Icons.arrow_forward, color: Color(0xFFD71921), size: 12),
-                ],
+              ListTile(
+                leading: const Icon(Icons.delete_forever, color: Colors.red),
+                title: Text("DELETE PERMANENTLY", style: GoogleFonts.shareTechMono(color: Colors.red)),
+                onTap: () async {
+                  Navigator.pop(ctx);
+                  // Uncomment for production:
+                  // await PhotoManager.editor.deleteWithIds([asset.id]);
+                  BinService().restore(asset); // Remove from bin tracking
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text("Permanently deleted (simulated)")),
+                    );
+                  }
+                },
               ),
             ],
           ),
@@ -320,3 +314,120 @@ class _AlbumTile extends StatelessWidget {
     );
   }
 }
+
+// --- ALBUM TILE (Made stateful to cache thumbnail) ---
+class _AlbumTile extends StatefulWidget {
+  final AssetPathEntity album;
+
+  const _AlbumTile({required this.album});
+
+  @override
+  State<_AlbumTile> createState() => _AlbumTileState();
+}
+
+class _AlbumTileState extends State<_AlbumTile> {
+  Uint8List? _cachedThumbnail;
+  int? _cachedCount;
+  bool _isLoading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _loadThumbnail();
+  }
+
+  Future<void> _loadThumbnail() async {
+    try {
+      final assets = await widget.album.getAssetListRange(start: 0, end: 1);
+      if (assets.isNotEmpty) {
+        final thumbnail = await assets.first.thumbnailDataWithSize(const ThumbnailSize(300, 300));
+        final count = await widget.album.assetCountAsync;
+        if (mounted) {
+          setState(() {
+            _cachedThumbnail = thumbnail;
+            _cachedCount = count;
+            _isLoading = false;
+          });
+        }
+      } else {
+        if (mounted) setState(() => _isLoading = false);
+      }
+    } catch (e) {
+      if (mounted) setState(() => _isLoading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => FolderDetailView(album: widget.album),
+          ),
+        );
+      },
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Expanded(
+            child: Container(
+              decoration: BoxDecoration(
+                color: Colors.grey[900],
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.white.withOpacity(0.1)),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: _cachedThumbnail != null
+                  ? Image.memory(
+                      _cachedThumbnail!,
+                      fit: BoxFit.cover,
+                      gaplessPlayback: true,
+                    )
+                  : _isLoading
+                      ? Container(
+                          color: Colors.grey[850],
+                          child: const Center(
+                            child: SizedBox(
+                              width: 20,
+                              height: 20,
+                              child: CircularProgressIndicator(
+                                strokeWidth: 2,
+                                color: Color(0xFFD71921),
+                              ),
+                            ),
+                          ),
+                        )
+                      : const Center(
+                          child: Icon(Icons.folder_open, color: Colors.grey, size: 40),
+                        ),
+            ),
+          ),
+          const SizedBox(height: 12),
+          Text(
+            widget.album.name.toUpperCase(),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontWeight: FontWeight.bold,
+              color: Colors.white,
+              fontSize: 14,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Row(
+            children: [
+              Text(
+                "${_cachedCount ?? '...'} FILES",
+                style: TextStyle(color: Colors.grey[600], fontSize: 10),
+              ),
+              const Spacer(),
+              const Icon(Icons.arrow_forward, color: Color(0xFFD71921), size: 12),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+}
+

@@ -1,9 +1,10 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart'; // Add this import
 import 'package:google_fonts/google_fonts.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import 'photo_tile.dart';
-import 'bin_service.dart'; // NEW IMPORT
+import 'bin_service.dart';
 
 enum GallerySortOrder { recent, oldest }
 
@@ -16,19 +17,45 @@ class FolderDetailView extends StatefulWidget {
   State<FolderDetailView> createState() => _FolderDetailViewState();
 }
 
-class _FolderDetailViewState extends State<FolderDetailView> {
+class _FolderDetailViewState extends State<FolderDetailView> with WidgetsBindingObserver {
   List<AssetEntity> _images = [];
   bool _isLoading = true;
   GallerySortOrder _sortOrder = GallerySortOrder.recent;
+  int _totalCount = 0;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _fetchPhotos();
+
+    // Listen for gallery changes
+    PhotoManager.addChangeCallback(_onPhotoChange);
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    PhotoManager.removeChangeCallback(_onPhotoChange);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      _fetchPhotos();
+    }
+  }
+
+  void _onPhotoChange(MethodCall call) {
+    if (mounted) _fetchPhotos();
   }
 
   Future<void> _fetchPhotos() async {
-    setState(() => _isLoading = true);
+    // OPTIMIZATION: Don't block UI, show loading only initially
+    final bool isInitialLoad = _images.isEmpty;
+    if (isInitialLoad) setState(() => _isLoading = true);
 
     final FilterOptionGroup filterOption = FilterOptionGroup(
       orders: [
@@ -40,7 +67,7 @@ class _FolderDetailViewState extends State<FolderDetailView> {
     );
 
     final albums = await PhotoManager.getAssetPathList(
-      type: RequestType.common, // CHANGED: Show videos too
+      type: RequestType.common,
       onlyAll: widget.album.isAll,
       filterOption: filterOption,
     );
@@ -51,16 +78,60 @@ class _FolderDetailViewState extends State<FolderDetailView> {
     );
 
     final int count = await matchingAlbum.assetCountAsync;
-    final media = await matchingAlbum.getAssetListRange(start: 0, end: count);
+    _totalCount = count;
 
-    // Filter out items that are in the bin
-    final visibleMedia = media.where((a) => !BinService().isInBin(a)).toList();
+    // ENHANCEMENT: Quick refresh for new items
+    if (!isInitialLoad && count > _images.length) {
+      final int newItemsCount = count - _images.length;
+      final List<AssetEntity> newMedia = await matchingAlbum.getAssetListRange(
+        start: 0,
+        end: newItemsCount,
+      );
+
+      if (mounted) {
+        setState(() {
+          _images.insertAll(0, newMedia);
+        });
+      }
+      return;
+    }
+
+    // OPTIMIZATION: Load first 30 immediately
+    const int firstBatch = 30;
+    final List<AssetEntity> initialMedia = await matchingAlbum.getAssetListRange(
+      start: 0,
+      end: count < firstBatch ? count : firstBatch,
+    );
 
     if (mounted) {
       setState(() {
-        _images = visibleMedia;
+        _images = initialMedia;
         _isLoading = false;
       });
+    }
+
+    // Load rest in background batches
+    if (count > firstBatch) {
+      const int batchSize = 100;
+      int currentStart = firstBatch;
+
+      while (currentStart < count) {
+        await Future.delayed(const Duration(milliseconds: 50));
+
+        final int end = (currentStart + batchSize) > count ? count : currentStart + batchSize;
+        final List<AssetEntity> batch = await matchingAlbum.getAssetListRange(
+          start: currentStart,
+          end: end,
+        );
+
+        if (mounted) {
+          setState(() {
+            _images.addAll(batch);
+          });
+        }
+
+        currentStart = end;
+      }
     }
   }
 
@@ -117,6 +188,23 @@ class _FolderDetailViewState extends State<FolderDetailView> {
             children: [
               Text("FOLDER VIEW", style: TextStyle(color: Colors.grey[600])),
               const Spacer(),
+              // OPTIMIZATION: Show loading indicator for remaining items
+              if (_images.length < _totalCount) ...[
+                SizedBox(
+                  width: 12,
+                  height: 12,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: Colors.grey[600],
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Text(
+                  "${_images.length}/$_totalCount",
+                  style: TextStyle(color: Colors.grey[600], fontSize: 10),
+                ),
+                const SizedBox(width: 16),
+              ],
               GestureDetector(
                 onTap: _toggleSortOrder,
                 child: Row(
@@ -147,30 +235,34 @@ class _FolderDetailViewState extends State<FolderDetailView> {
     if (_isLoading) {
       return const Center(child: CircularProgressIndicator(color: Color(0xFFD71921)));
     }
-    if (_images.isEmpty) {
-      return const Center(child: Text("NO IMAGES FOUND"));
-    }
 
-    return GridView.builder(
-      padding: const EdgeInsets.symmetric(horizontal: 2),
-      cacheExtent: 1000,
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        crossAxisSpacing: 2,
-        mainAxisSpacing: 2,
-        childAspectRatio: 1.0,
-      ),
-      itemCount: _images.length,
-      itemBuilder: (context, index) {
-        return PhotoTile(
-          asset: _images[index],
-          assets: _images,
-          index: index,
-          onDeleted: () {
-            // FIX: Refresh the UI when item is deleted
-            setState(() {
-              _images.removeAt(index);
-            });
+    return ValueListenableBuilder<List<String>>(
+      valueListenable: BinService().binnedIdsListenable,
+      builder: (context, binnedIds, child) {
+        // Filter the images list against the binned IDs
+        final visibleImages = _images.where((img) => !binnedIds.contains(img.id)).toList();
+
+        if (visibleImages.isEmpty) {
+          return const Center(child: Text("NO IMAGES FOUND"));
+        }
+
+        return GridView.builder(
+          padding: const EdgeInsets.symmetric(horizontal: 2),
+          cacheExtent: 1000,
+          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+            crossAxisCount: 3,
+            crossAxisSpacing: 2,
+            mainAxisSpacing: 2,
+            childAspectRatio: 1.0,
+          ),
+          itemCount: visibleImages.length,
+          itemBuilder: (context, index) {
+            return PhotoTile(
+              asset: visibleImages[index],
+              assets: visibleImages,
+              index: index,
+              onDeleted: () {},
+            );
           },
         );
       },
