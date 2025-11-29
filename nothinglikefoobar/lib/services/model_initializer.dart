@@ -15,6 +15,7 @@ class ModelInitializer {
   bool _isInitializing = false;
   String? _error;
   String _statusMessage = 'Not initialized';
+  bool _isAnalyzing = false; // Flag to ensure one analysis at a time
 
   bool get isInitialized => _isInitialized;
   bool get isInitializing => _isInitializing;
@@ -140,11 +141,40 @@ class ModelInitializer {
       return null;
     }
 
+    // Wait if another analysis is in progress
+    while (_isAnalyzing) {
+      debugPrint('[ModelInitializer] Waiting for previous analysis to complete...');
+      await Future.delayed(const Duration(milliseconds: 500));
+    }
+
+    _isAnalyzing = true;
     try {
       debugPrint('[ModelInitializer] Analyzing image: $imagePath');
       
+      // Wrap in timeout with proper cleanup
+      final result = await Future.any([
+        _analyzeImageInternal(imagePath),
+        Future.delayed(const Duration(seconds: 60)).then((_) => null),  // Increased to 60s for device
+      ]);
+
+      if (result == null) {
+        debugPrint('[ModelInitializer] Analysis timeout after 60s');
+      }
+      return result;
+    } catch (e) {
+      debugPrint('[ModelInitializer] Error analyzing image: $e');
+      return null;
+    } finally {
+      _isAnalyzing = false;
+      // Add small delay to ensure model is ready for next request
+      await Future.delayed(const Duration(milliseconds: 100));
+    }
+  }
+
+  Future<String?> _analyzeImageInternal(String imagePath) async {
+    try {
       final streamedResult = await _lm.generateCompletionStream(
-        params: CactusCompletionParams(maxTokens: 200),  // Reduced from 500 to reduce memory
+        params: CactusCompletionParams(maxTokens: 200),
         messages: [
           ChatMessage(
             content: 'You are a helpful AI assistant that analyzes images. Describe images concisely.',
@@ -172,7 +202,7 @@ class ModelInitializer {
         return null;
       }
     } catch (e) {
-      debugPrint('[ModelInitializer] Error analyzing image: $e');
+      debugPrint('[ModelInitializer] Error in internal analysis: $e');
       return null;
     }
   }

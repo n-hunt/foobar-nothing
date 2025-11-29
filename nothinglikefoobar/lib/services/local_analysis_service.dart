@@ -47,6 +47,9 @@ class LocalAnalysisService {
       return;
     }
 
+    // Set flag immediately to prevent race condition
+    _isProcessing = true;
+
     final modelInit = ModelInitializer.instance;
     if (!modelInit.isInitialized) {
       debugPrint('[LocalAnalysis] Model not initialized, waiting...');
@@ -59,11 +62,11 @@ class LocalAnalysisService {
       
       if (!modelInit.isInitialized) {
         debugPrint('[LocalAnalysis] Model failed to initialize after 120s');
+        _isProcessing = false;  // Reset flag on failure
         return;
       }
     }
 
-    _isProcessing = true;
     _processedCount = 0;
 
     try {
@@ -141,16 +144,10 @@ class LocalAnalysisService {
             continue;
           }
 
-          // Analyze image with vision model (with timeout and error handling)
+          // Analyze image with vision model (error handling in ModelInitializer)
           String? description;
           try {
-            description = await modelInit.analyzeImage(file.path).timeout(
-              const Duration(seconds: 30),
-              onTimeout: () {
-                debugPrint('[LocalAnalysis] Analysis timeout for: $fileName');
-                return null;
-              },
-            );
+            description = await modelInit.analyzeImage(file.path);
           } catch (analysisError) {
             debugPrint('[LocalAnalysis] Analysis error for $fileName: $analysisError');
             description = null;
@@ -183,13 +180,13 @@ class LocalAnalysisService {
           _processedCount++;
           _emitProgress();
           
-          // Add delay after each image to prevent memory issues
-          await Future.delayed(const Duration(milliseconds: 200));
+          // Add delay after each image to ensure model is ready
+          await Future.delayed(const Duration(milliseconds: 500));
           
-          // Longer pause every 10 images to allow GC
-          if (_processedCount % 10 == 0) {
+          // Longer pause every 5 images to allow GC and model recovery
+          if (_processedCount % 5 == 0) {
             debugPrint('[LocalAnalysis] Processed ${_processedCount}/$_totalCount, pausing for GC...');
-            await Future.delayed(const Duration(seconds: 2));
+            await Future.delayed(const Duration(seconds: 3));
           }
         } catch (e, stackTrace) {
           debugPrint('[LocalAnalysis] Error analyzing image: $e');
