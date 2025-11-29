@@ -258,6 +258,8 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> with WidgetsBin
   }
 
   Future<void> _insertAssetsToDatabase(List<AssetEntity> assets) async {
+    bool anyNewImagesInserted = false;
+    
     for (final asset in assets) {
       try {
         // Check if image already exists
@@ -278,9 +280,17 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> with WidgetsBin
           fileModifiedDate: asset.modifiedDateTime.millisecondsSinceEpoch ~/ 1000,
           fileSizeBytes: fileSize,
         );
+        
+        anyNewImagesInserted = true;
       } catch (e) {
         debugPrint('Error inserting asset to database: $e');
       }
+    }
+    
+    // Trigger analysis if new images were added
+    if (anyNewImagesInserted) {
+      debugPrint('[Main] New images inserted, triggering analysis...');
+      _startLocalAnalysis();
     }
   }
 
