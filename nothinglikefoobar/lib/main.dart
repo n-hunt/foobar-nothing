@@ -3,6 +3,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import 'search_view.dart';
+import 'search_view_2.dart';
 import 'folders_view.dart';
 import 'photo_tile.dart';
 import 'bin_service.dart';
@@ -196,6 +197,8 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
         return const FoldersView(key: ValueKey('folders'));
       case 2:
         return const SearchView();
+      case 3:
+        return const SearchView2();
       default:
         return _buildGalleryView();
     }
@@ -378,6 +381,7 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
           _buildNavItem(0, "GALLERY"),
           _buildNavItem(1, "FOLDERS"),
           _buildNavItem(2, "SEARCH"),
+          _buildNavItem(3, "SEARCH 2"),
         ],
       ),
     );
