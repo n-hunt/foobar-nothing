@@ -7,6 +7,7 @@ import 'package:share_plus/share_plus.dart';
 
 import 'video_view.dart';
 import 'edit_image_view.dart'; // Import Edit View
+import 'edit_video_view.dart';
 import 'bin_service.dart';
 
 class FullscreenImageView extends StatefulWidget {
@@ -59,9 +60,12 @@ class _FullscreenImageViewState extends State<FullscreenImageView> {
           builder: (context) => EditImageView(asset: asset),
         ),
       );
-    } else {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text("Video editing coming soon")),
+    } else if (asset.type == AssetType.video) {
+      Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (context) => EditVideoView(asset: asset),
+        ),
       );
     }
   }
@@ -226,7 +230,7 @@ class _FullscreenImageViewState extends State<FullscreenImageView> {
             left: 0,
             right: 0,
             child: Container(
-              color: Colors.black.withOpacity(0.8),
+              color: Colors.black.withValues(alpha: 0.8),
               padding: const EdgeInsets.symmetric(vertical: 20, horizontal: 40),
               child: widget.isFromBin
                   ? Row(

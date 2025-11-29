@@ -73,7 +73,8 @@ class _FoldersViewState extends State<FoldersView> with WidgetsBindingObserver {
       return const Center(child: CircularProgressIndicator(color: Color(0xFFD71921)));
     }
 
-    int totalCount = _albums.length + 1;
+    // Always include bin tile, even if no albums exist
+    int totalCount = _albums.length + 1; // +1 for bin
 
     return Column(
       children: [
@@ -89,14 +90,15 @@ class _FoldersViewState extends State<FoldersView> with WidgetsBindingObserver {
             ),
             itemCount: totalCount,
             itemBuilder: (context, index) {
-              if (index == 1) {
-                // Bin Tile uses ValueListenableBuilder for reactive count
+              // First item is always the bin
+              if (index == 0) {
                 return ValueListenableBuilder<List<String>>(
                   valueListenable: BinService().binnedIdsListenable,
                   builder: (context, binnedIds, child) => const _BinTile(),
                 );
               }
-              final albumIndex = index > 1 ? index - 1 : index;
+              // Remaining items are albums
+              final albumIndex = index - 1;
               return _AlbumTile(album: _albums[albumIndex]);
             },
           ),
@@ -117,7 +119,7 @@ class _FoldersViewState extends State<FoldersView> with WidgetsBindingObserver {
           ),
           const SizedBox(height: 8),
           Text(
-            "${_albums.length + 1} COLLECTIONS FOUND",
+            "${_albums.length + 1} COLLECTIONS FOUND", // +1 for bin
             style: TextStyle(color: Colors.grey[600], fontSize: 12, letterSpacing: 1.2),
           ),
           const SizedBox(height: 10),
@@ -149,7 +151,7 @@ class _BinTile extends StatelessWidget {
               decoration: BoxDecoration(
                 color: Colors.grey[900],
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: const Color(0xFFD71921).withOpacity(0.3)),
+                border: Border.all(color: const Color(0xFFD71921).withValues(alpha: 0.3)),
               ),
               child: const Center(
                 child: Column(
@@ -375,7 +377,7 @@ class _AlbumTileState extends State<_AlbumTile> {
               decoration: BoxDecoration(
                 color: Colors.grey[900],
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: Colors.white.withOpacity(0.1)),
+                border: Border.all(color: Colors.white.withValues(alpha: 0.1)),
               ),
               clipBehavior: Clip.antiAlias,
               child: _cachedThumbnail != null
@@ -430,4 +432,3 @@ class _AlbumTileState extends State<_AlbumTile> {
     );
   }
 }
-

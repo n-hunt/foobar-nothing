@@ -258,7 +258,7 @@ class _EditImageViewState extends State<EditImageView> {
             }
           },
           baseColor: Colors.black,
-          maskColor: Colors.black.withOpacity(0.7),
+          maskColor: Colors.black.withValues(alpha: 0.7),
           cornerDotBuilder: (size, edgeAlignment) =>
           const DotControl(color: Color(0xFFD71921)),
         ),
@@ -435,7 +435,7 @@ class _EraserPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = const Color(0xFFD71921).withOpacity(0.5)
+      ..color = const Color(0xFFD71921).withValues(alpha: 0.5)
       ..strokeCap = StrokeCap.round
       ..strokeWidth = strokeWidth;
 
