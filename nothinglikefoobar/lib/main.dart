@@ -1,12 +1,13 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/foundation.dart'; // Required for SynchronousFuture
 import 'package:google_fonts/google_fonts.dart';
 import 'package:photo_manager/photo_manager.dart';
-import 'package:transparent_image/transparent_image.dart';
-import 'dart:typed_data';
-import 'dart:ui' as ui;
 
-import 'fullscreen_view.dart';
+// Page Imports
+import 'search_view.dart';
+import 'folders_view.dart';
+
+// Widget Imports
+import 'photo_tile.dart';
 
 void main() {
   runApp(const CactusApp());
@@ -48,14 +49,15 @@ class NothingGalleryHome extends StatefulWidget {
 enum GallerySortOrder { recent, oldest }
 
 class _NothingGalleryHomeState extends State<NothingGalleryHome> {
-  // Navigation State
   int _selectedIndex = 0;
-
-  // Gallery State
   List<AssetEntity> _images = [];
   bool _isLoading = true;
   bool _hasPermission = false;
   GallerySortOrder _sortOrder = GallerySortOrder.recent;
+
+  // Category State
+  String _selectedCategory = 'CAMERA';
+  final List<String> _categories = ['CAMERA', 'VIDEOS', 'SCREENS', 'ALL'];
 
   @override
   void initState() {
@@ -64,7 +66,7 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
   }
 
   Future<void> _fetchAssets() async {
-    // Only set loading if we don't have images yet to avoid flashing
+    // Only show loading if empty to prevent flashing on refresh
     if (_images.isEmpty) setState(() => _isLoading = true);
 
     final PermissionState ps = await PhotoManager.requestPermissionExtend();
@@ -86,9 +88,19 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
       ],
     );
 
+    // 1. Determine Request Type
+    RequestType requestType = RequestType.image;
+    if (_selectedCategory == 'VIDEOS') {
+      requestType = RequestType.video;
+    } else if (_selectedCategory == 'ALL' || _selectedCategory == 'CAMERA') {
+      // CHANGED: CAMERA now requests both images and videos (common)
+      requestType = RequestType.common;
+    }
+
+    // 2. Fetch Albums
     final List<AssetPathEntity> albums = await PhotoManager.getAssetPathList(
-      type: RequestType.image,
-      onlyAll: true,
+      type: requestType,
+      hasAll: true,
       filterOption: filterOption,
     );
 
@@ -96,13 +108,30 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
       setState(() {
         _isLoading = false;
         _hasPermission = true;
+        _images = [];
       });
       return;
     }
 
-    final int assetCount = await albums[0].assetCountAsync;
+    // 3. Filter for specific album based on Category
+    AssetPathEntity targetAlbum = albums.first;
+    String targetName = "Camera"; // Default
 
-    final List<AssetEntity> media = await albums[0].getAssetListRange(
+    if (_selectedCategory == 'SCREENS') targetName = "Screenshots";
+    if (_selectedCategory == 'ALL') targetName = "Recent";
+
+    if (_selectedCategory != 'ALL') {
+      for (var album in albums) {
+        // Robust check for Camera folder
+        if (album.name == targetName || (targetName == "Camera" && !album.isAll && album.name.contains("Camera"))) {
+          targetAlbum = album;
+          break;
+        }
+      }
+    }
+
+    final int assetCount = await targetAlbum.assetCountAsync;
+    final List<AssetEntity> media = await targetAlbum.getAssetListRange(
       start: 0,
       end: assetCount,
     );
@@ -129,11 +158,8 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
       body: SafeArea(
         child: Column(
           children: [
-            // Expanded content area that switches based on tab
             Expanded(
-              child: _selectedIndex == 0
-                  ? _buildGalleryView()
-                  : _buildSearchView(),
+              child: _buildBodyContent(),
             ),
             _buildNothingNavBar(),
           ],
@@ -142,7 +168,20 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
     );
   }
 
-  // --- VIEW 1: GALLERY ---
+  Widget _buildBodyContent() {
+    switch (_selectedIndex) {
+      case 0:
+        return _buildGalleryView();
+      case 1:
+        return const FoldersView();
+      case 2:
+        return const SearchView();
+      default:
+        return _buildGalleryView();
+    }
+  }
+
+  // --- GALLERY VIEW ---
   Widget _buildGalleryView() {
     return Column(
       children: [
@@ -171,8 +210,36 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
           const SizedBox(height: 8),
           Row(
             children: [
-              Text("PRIVACY GALLERY", style: TextStyle(color: Colors.grey[600])),
+              // CATEGORY DROPDOWN
+              DropdownButtonHideUnderline(
+                child: DropdownButton<String>(
+                  value: _selectedCategory,
+                  dropdownColor: Colors.grey[900],
+                  icon: const Icon(Icons.keyboard_arrow_down, color: Color(0xFFD71921), size: 16),
+                  style: GoogleFonts.shareTechMono(
+                      color: Colors.white,
+                      fontSize: 14,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 1.0
+                  ),
+                  items: _categories.map((String category) {
+                    return DropdownMenuItem<String>(
+                      value: category,
+                      child: Text(category),
+                    );
+                  }).toList(),
+                  onChanged: (String? newValue) {
+                    if (newValue != null) {
+                      setState(() {
+                        _selectedCategory = newValue;
+                        _fetchAssets();
+                      });
+                    }
+                  },
+                ),
+              ),
               const Spacer(),
+              // SORT BUTTON
               GestureDetector(
                 onTap: _toggleSortOrder,
                 child: Row(
@@ -198,18 +265,24 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
               ),
               const SizedBox(width: 16),
               if (_images.isNotEmpty)
-                Text("${_images.length} FILES", style: const TextStyle(fontSize: 12)),
+                Text("${_images.length}", style: const TextStyle(fontSize: 12)),
             ],
           ),
-          const SizedBox(height: 10),
-          Container(height: 1, color: Colors.grey[800]),
+          const SizedBox(height: 4),
+          _isLoading
+              ? const LinearProgressIndicator(
+              minHeight: 1,
+              backgroundColor: Colors.transparent,
+              color: Color(0xFFD71921)
+          )
+              : Container(height: 1, color: Colors.grey[800]),
         ],
       ),
     );
   }
 
   Widget _buildGridBody() {
-    if (_isLoading) {
+    if (_isLoading && _images.isEmpty) {
       return const Center(child: CircularProgressIndicator(color: Color(0xFFD71921)));
     }
 
@@ -218,7 +291,16 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
     }
 
     if (_images.isEmpty) {
-      return const Center(child: Text("NO IMAGES FOUND"));
+      return Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.image_not_supported_outlined, color: Colors.grey[800], size: 48),
+            const SizedBox(height: 16),
+            Text("NO ${_selectedCategory} FOUND", style: TextStyle(color: Colors.grey[600])),
+          ],
+        ),
+      );
     }
 
     return GridView.builder(
@@ -232,7 +314,11 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
       ),
       itemCount: _images.length,
       itemBuilder: (context, index) {
-        return _PhotoTile(asset: _images[index]);
+        return PhotoTile(
+          asset: _images[index],
+          assets: _images,
+          index: index,
+        );
       },
     );
   }
@@ -256,48 +342,6 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
     );
   }
 
-  // --- VIEW 2: SEARCH (Placeholder for Dev B) ---
-  Widget _buildSearchView() {
-    return Padding(
-      padding: const EdgeInsets.all(24.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(
-            "SEARCH",
-            style: GoogleFonts.shareTechMono(fontSize: 28, fontWeight: FontWeight.bold),
-          ),
-          const SizedBox(height: 20),
-          TextField(
-            style: const TextStyle(color: Colors.white, fontSize: 18),
-            decoration: InputDecoration(
-              hintText: "TYPE COMMAND...",
-              hintStyle: TextStyle(color: Colors.grey[700]),
-              enabledBorder: const UnderlineInputBorder(borderSide: BorderSide(color: Colors.white)),
-              focusedBorder: const UnderlineInputBorder(borderSide: BorderSide(color: Color(0xFFD71921))),
-            ),
-          ),
-          const SizedBox(height: 40),
-          Expanded(
-            child: Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  Icon(Icons.auto_awesome, size: 40, color: Colors.grey[800]),
-                  const SizedBox(height: 16),
-                  Text(
-                    "CACTUS AGENT READY",
-                    style: TextStyle(color: Colors.grey[700], letterSpacing: 2),
-                  ),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   // --- NAVIGATION BAR ---
   Widget _buildNothingNavBar() {
     return Container(
@@ -310,7 +354,8 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
         mainAxisAlignment: MainAxisAlignment.spaceEvenly,
         children: [
           _buildNavItem(0, "GALLERY"),
-          _buildNavItem(1, "SEARCH"),
+          _buildNavItem(1, "FOLDERS"),
+          _buildNavItem(2, "SEARCH"),
         ],
       ),
     );
@@ -322,7 +367,7 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
       onTap: () => setState(() => _selectedIndex = index),
       behavior: HitTestBehavior.opaque,
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         child: Row(
           children: [
             if (isSelected) ...[
@@ -342,95 +387,4 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> {
       ),
     );
   }
-}
-
-class _PhotoTile extends StatelessWidget {
-  final AssetEntity asset;
-
-  const _PhotoTile({required this.asset});
-
-  @override
-  Widget build(BuildContext context) {
-    final imageProvider = AssetEntityImageProvider(
-        asset,
-        thumbnailSize: const ThumbnailSize.square(300)
-    );
-
-    return GestureDetector(
-      onTap: () async {
-        final bytes = await asset.thumbnailDataWithSize(const ThumbnailSize.square(300));
-
-        if (context.mounted) {
-          Navigator.of(context).push(
-            MaterialPageRoute(
-              builder: (context) => FullscreenImageView(
-                  asset: asset,
-                  thumbnailBytes: bytes
-              ),
-            ),
-          );
-        }
-      },
-      child: Hero(
-        tag: asset.id,
-        child: FadeInImage(
-          placeholder: MemoryImage(kTransparentImage),
-          image: imageProvider,
-          fit: BoxFit.cover,
-          fadeInDuration: const Duration(milliseconds: 200),
-          excludeFromSemantics: true,
-        ),
-      ),
-    );
-  }
-}
-
-// Custom ImageProvider for native caching (kept from previous version)
-class AssetEntityImageProvider extends ImageProvider<AssetEntityImageProvider> {
-  final AssetEntity entity;
-  final ThumbnailSize thumbnailSize;
-
-  const AssetEntityImageProvider(
-      this.entity, {
-        this.thumbnailSize = const ThumbnailSize.square(300),
-      });
-
-  @override
-  ImageStreamCompleter loadImage(AssetEntityImageProvider key, ImageDecoderCallback decode) {
-    return MultiFrameImageStreamCompleter(
-      codec: _loadAsync(key, decode),
-      scale: 1.0,
-      debugLabel: 'AssetEntityImageProvider(${key.entity.id})',
-      informationCollector: () => <DiagnosticsNode>[
-        DiagnosticsProperty<AssetEntityImageProvider>('Image provider', this),
-        DiagnosticsProperty<AssetEntityImageProvider>('Image key', key),
-      ],
-    );
-  }
-
-  Future<ui.Codec> _loadAsync(AssetEntityImageProvider key, ImageDecoderCallback decode) async {
-    try {
-      final data = await key.entity.thumbnailDataWithSize(thumbnailSize);
-      if (data == null) throw StateError('Could not load data for asset: ${key.entity.id}');
-      return await decode(await ui.ImmutableBuffer.fromUint8List(data));
-    } catch (e) {
-      return await decode(await ui.ImmutableBuffer.fromUint8List(Uint8List(0)));
-    }
-  }
-
-  @override
-  Future<AssetEntityImageProvider> obtainKey(ImageConfiguration configuration) {
-    return SynchronousFuture<AssetEntityImageProvider>(this);
-  }
-
-  @override
-  bool operator ==(Object other) {
-    if (other.runtimeType != runtimeType) return false;
-    return other is AssetEntityImageProvider &&
-        other.entity.id == entity.id &&
-        other.thumbnailSize == thumbnailSize;
-  }
-
-  @override
-  int get hashCode => Object.hash(entity.id, thumbnailSize);
 }
