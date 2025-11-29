@@ -9,8 +9,23 @@ import 'photo_tile.dart';
 import 'bin_service.dart';
 import 'debug_view.dart';
 import 'database/image_database.dart';
+import 'services/model_initializer.dart';
+import 'services/local_analysis_service.dart';
+import 'widgets/model_status_widget.dart';
 
-void main() {
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  
+  // Initialize vision model on app startup
+  final modelInit = ModelInitializer.instance;
+  modelInit.initializeOnStartup().then((success) {
+    if (success) {
+      debugPrint('[Main] Vision model ready!');
+    } else {
+      debugPrint('[Main] Vision model failed to initialize: ${modelInit.error}');
+    }
+  });
+  
   runApp(const CactusApp());
 }
 
@@ -72,6 +87,14 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> with WidgetsBin
     // OPTIMIZATION: Listen for new photos/videos being added
     PhotoManager.addChangeCallback(_onPhotoManagerChange);
     PhotoManager.startChangeNotify();
+    
+    // Start local analysis after images are loaded
+    _startLocalAnalysis();
+  }
+
+  Future<void> _startLocalAnalysis() async {
+    // Start in background without blocking
+    LocalAnalysisService.instance.startBackgroundAnalysis();
   }
 
   @override
@@ -324,7 +347,13 @@ class _NothingGalleryHomeState extends State<NothingGalleryHome> with WidgetsBin
                 "NOTHING",
                 style: GoogleFonts.shareTechMono(fontSize: 28, fontWeight: FontWeight.bold),
               ),
-              Container(width: 8, height: 8, color: const Color(0xFFD71921)),
+              Row(
+                children: [
+                  ModelStatusWidget(),
+                  const SizedBox(width: 12),
+                  Container(width: 8, height: 8, color: const Color(0xFFD71921)),
+                ],
+              ),
             ],
           ),
           const SizedBox(height: 8),
