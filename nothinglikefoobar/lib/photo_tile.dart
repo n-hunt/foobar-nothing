@@ -9,6 +9,7 @@ import 'package:transparent_image/transparent_image.dart';
 import 'fullscreen_view.dart';
 import 'asset_image_provider.dart';
 import 'edit_image_view.dart';
+import 'edit_video_view.dart';
 import 'bin_service.dart';
 
 class PhotoTile extends StatelessWidget {
@@ -110,6 +111,8 @@ class PhotoTile extends StatelessWidget {
   }
 
   void _showOptionsSheet(BuildContext context) {
+    final isVideo = asset.type == AssetType.video;
+
     showModalBottomSheet(
       context: context,
       backgroundColor: Colors.black,
@@ -149,22 +152,38 @@ class PhotoTile extends StatelessWidget {
                       }
                     },
                   ),
-                  _OptionButton(
-                    icon: Icons.edit_outlined,
-                    label: "EDIT",
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      _navigateToEditor(context);
-                    },
-                  ),
-                  _OptionButton(
-                    icon: Icons.auto_fix_normal_outlined,
-                    label: "MAGIC ERASER",
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      _navigateToEditor(context, initialToolIndex: 2);
-                    },
-                  ),
+                  if (isVideo)
+                    _OptionButton(
+                      icon: Icons.cut_outlined,
+                      label: "TRIM",
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        Navigator.push(
+                          context,
+                          MaterialPageRoute(
+                            builder: (context) => EditVideoView(asset: asset),
+                          ),
+                        );
+                      },
+                    )
+                  else ...[
+                    _OptionButton(
+                      icon: Icons.edit_outlined,
+                      label: "EDIT",
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        _navigateToEditor(context);
+                      },
+                    ),
+                    _OptionButton(
+                      icon: Icons.auto_fix_normal_outlined,
+                      label: "MAGIC ERASER",
+                      onTap: () {
+                        Navigator.pop(ctx);
+                        _navigateToEditor(context, initialToolIndex: 2);
+                      },
+                    ),
+                  ],
                   _OptionButton(
                     icon: Icons.delete_outline,
                     label: "BIN",
